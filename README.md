@@ -62,6 +62,15 @@ traderclaw install --wizard
 
 This opens a localhost UI that runs prechecks, lane-aware setup, gateway validation, optional Telegram setup, and final verification.
 
+### Optional: Run CLI prechecks directly
+
+```bash
+traderclaw precheck --dry-run --output linux-qa-dryrun.log
+traderclaw precheck --allow-install --output linux-qa-install.log
+```
+
+Use `--dry-run` for non-mutating validation and `--allow-install` for guided dependency installs.
+
 ### 3. Run the mandatory startup sequence
 
 Send this prompt to your bot after startup:

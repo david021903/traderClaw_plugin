@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createInterface } from "readline";
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
@@ -1139,6 +1139,152 @@ function parseInstallWizardArgs(args) {
   return out;
 }
 
+function parsePrecheckArgs(args) {
+  const out = {
+    mode: "dry-run",
+    outputPath: "",
+    orchestratorUrl: "https://api.traderclaw.ai",
+    expectedNodeMajor: 22,
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const key = args[i];
+    const next = args[i + 1];
+    if (key === "--allow-install") out.mode = "allow-install";
+    if (key === "--dry-run") out.mode = "dry-run";
+    if (key === "--output" && next) out.outputPath = args[++i];
+    if (key.startsWith("--output=")) out.outputPath = key.slice("--output=".length);
+    if (key === "--url" && next) out.orchestratorUrl = args[++i];
+    if (key === "--expected-node-major" && next) {
+      const parsed = Number.parseInt(args[++i], 10);
+      if (Number.isFinite(parsed) && parsed > 0) out.expectedNodeMajor = parsed;
+    }
+  }
+  return out;
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function appendOutput(outputPath, line) {
+  if (!outputPath) return;
+  appendFileSync(outputPath, `${line}\n`, "utf-8");
+}
+
+function makePrecheckLogger(outputPath) {
+  const counters = { pass: 0, fail: 0, warn: 0 };
+  const log = (level, message) => {
+    const line = `${nowIso()} [${level}] ${message}`;
+    print(line);
+    appendOutput(outputPath, line);
+    if (level === "PASS") counters.pass += 1;
+    if (level === "FAIL") counters.fail += 1;
+    if (level === "WARN") counters.warn += 1;
+  };
+  return {
+    counters,
+    info: (m) => log("INFO", m),
+    pass: (m) => log("PASS", m),
+    fail: (m) => log("FAIL", m),
+    warn: (m) => log("WARN", m),
+  };
+}
+
+function nodeMajorVersion() {
+  const v = getCommandOutput("node -v");
+  if (!v) return 0;
+  const parsed = Number.parseInt(v.replace(/^v/i, "").split(".")[0], 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function cmdPrecheck(args) {
+  const opts = parsePrecheckArgs(args);
+  if (opts.outputPath) {
+    writeFileSync(opts.outputPath, "", "utf-8");
+  }
+  const log = makePrecheckLogger(opts.outputPath);
+
+  log.info("Starting TraderClaw precheck");
+  log.info(`Mode: ${opts.mode}`);
+  log.info(`Orchestrator URL: ${opts.orchestratorUrl}`);
+
+  if (!commandExists("node")) {
+    log.fail("node exists in PATH");
+  } else {
+    const major = nodeMajorVersion();
+    if (major >= opts.expectedNodeMajor) {
+      log.pass(`node major >= ${opts.expectedNodeMajor} (found v${major})`);
+    } else {
+      log.fail(`node major >= ${opts.expectedNodeMajor} (found v${major})`);
+    }
+  }
+
+  if (commandExists("npm")) log.pass("npm exists in PATH");
+  else log.fail("npm exists in PATH");
+
+  if (commandExists("openclaw")) {
+    log.pass("openclaw exists in PATH");
+  } else if (opts.mode === "allow-install") {
+    log.info("Installing openclaw (allow-install mode)");
+    try {
+      execSync("npm install -g openclaw", { stdio: "ignore" });
+      if (commandExists("openclaw")) log.pass("openclaw installed successfully");
+      else log.fail("openclaw install completed but command is still missing");
+    } catch {
+      log.fail("openclaw install failed");
+    }
+  } else {
+    log.warn("openclaw missing (dry-run mode, not installing)");
+  }
+
+  if (commandExists("tailscale")) {
+    log.pass("tailscale exists in PATH");
+  } else if (opts.mode === "allow-install") {
+    log.info("Installing tailscale (allow-install mode)");
+    try {
+      execSync("bash -lc \"if command -v sudo >/dev/null 2>&1; then sudo bash -lc 'curl -fsSL https://tailscale.com/install.sh | sh'; else curl -fsSL https://tailscale.com/install.sh | sh; fi\"", { stdio: "inherit" });
+      if (commandExists("tailscale")) log.pass("tailscale installed successfully");
+      else log.fail("tailscale install completed but command is still missing");
+    } catch {
+      log.fail("tailscale install failed");
+      log.warn("If this is a sudo/permission issue, run: sudo bash -lc 'curl -fsSL https://tailscale.com/install.sh | sh'");
+    }
+  } else {
+    log.warn("tailscale missing (dry-run mode, not installing)");
+  }
+
+  try {
+    const orchestrator = await httpRequest(`${opts.orchestratorUrl.replace(/\/+$/, "")}/healthz`, { timeout: 10000 });
+    if (orchestrator.ok) log.pass(`orchestrator health endpoint reachable (${opts.orchestratorUrl.replace(/\/+$/, "")}/healthz)`);
+    else log.warn(`orchestrator health endpoint returned HTTP ${orchestrator.status} (${opts.orchestratorUrl.replace(/\/+$/, "")}/healthz)`);
+  } catch {
+    log.warn(`orchestrator health endpoint not reachable (${opts.orchestratorUrl.replace(/\/+$/, "")}/healthz)`);
+  }
+
+  if (commandExists("openclaw")) {
+    try {
+      execSync("openclaw gateway status", { stdio: "ignore" });
+      log.pass("openclaw gateway status command succeeded");
+    } catch {
+      log.warn("openclaw gateway status returned non-zero");
+    }
+  } else {
+    log.warn("skipping gateway status check (openclaw missing)");
+  }
+
+  log.info("Manual staging run commands:");
+  log.info("  1) traderclaw install --wizard");
+  log.info("  2) Select lane: event-driven");
+  log.info("  3) Approve tailscale login in provided URL");
+  log.info("  4) Confirm /v1/responses returns non-404 on funnel host");
+  log.info("  5) Optional telegram setup + probe");
+  log.info("  6) Startup prompt check: solana_system_status, solana_alpha_subscribe, solana_positions");
+  log.info(`Precheck summary: pass=${log.counters.pass} fail=${log.counters.fail} warn=${log.counters.warn}`);
+
+  if (log.counters.fail > 0) process.exitCode = 1;
+}
+
 function openBrowser(url) {
   try {
     execSync(`xdg-open "${url}"`, { stdio: "ignore" });
@@ -1418,6 +1564,7 @@ Usage: traderclaw <command> [options]
 
 Commands:
   setup              Set up the plugin (signup or API key, session, wallet)
+  precheck           Run environment checks (dry-run or allow-install)
   install            Launch installer flows (--wizard for localhost GUI)
   login              Re-authenticate (challenge flow, new session)
   logout             Revoke current session and clear tokens
@@ -1443,6 +1590,8 @@ Config subcommands:
 
 Examples:
   traderclaw setup
+  traderclaw precheck --dry-run --output precheck.log
+  traderclaw precheck --allow-install
   traderclaw install --wizard
   traderclaw install --wizard --lane quick-local
   traderclaw setup --signup --user-id my_agent_001
@@ -1473,6 +1622,9 @@ async function main() {
   switch (command) {
     case "setup":
       await cmdSetup(args.slice(1));
+      break;
+    case "precheck":
+      await cmdPrecheck(args.slice(1));
       break;
     case "install":
       await cmdInstall(args.slice(1));
