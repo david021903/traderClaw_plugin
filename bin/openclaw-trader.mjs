@@ -1234,6 +1234,7 @@ function wizardHtml(defaults) {
       <div class="card">
         <h3>Status: <span id="status">idle</span></h3>
         <p class="muted" id="approval"></p>
+        <pre id="manual" class="err"></pre>
         <table>
           <thead><tr><th>Step</th><th>Status</th><th>Detail</th></tr></thead>
           <tbody id="steps"></tbody>
@@ -1247,6 +1248,7 @@ function wizardHtml(defaults) {
     <script>
       const stateEl = document.getElementById("status");
       const approvalEl = document.getElementById("approval");
+      const manualEl = document.getElementById("manual");
       const stepsEl = document.getElementById("steps");
       const logsEl = document.getElementById("logs");
       document.getElementById("lane").value = "${defaults.lane}";
@@ -1273,6 +1275,10 @@ function wizardHtml(defaults) {
         stateEl.textContent = data.status || "idle";
         approvalEl.textContent = data.detected && data.detected.tailscaleApprovalUrl
           ? "Tailscale approval link: " + data.detected.tailscaleApprovalUrl
+          : "";
+        const errors = data.errors || [];
+        manualEl.textContent = errors.length > 0
+          ? errors.map((e) => "Step " + (e.stepId || "unknown") + ":\\n" + (e.error || "")).join("\\n\\n")
           : "";
         stepsEl.innerHTML = "";
         (data.stepResults || []).forEach((row) => {

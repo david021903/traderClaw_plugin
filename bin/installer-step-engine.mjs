@@ -28,6 +28,66 @@ function extractUrls(text = "") {
   return matches ? [...new Set(matches)] : [];
 }
 
+function shellQuote(value) {
+  const raw = String(value ?? "");
+  if (raw.length === 0) return "''";
+  return `'${raw.replace(/'/g, `'\\''`)}'`;
+}
+
+function buildCommandString(cmd, args = []) {
+  return [cmd, ...args].map((part) => shellQuote(part)).join(" ");
+}
+
+function isPrivilegeError(err) {
+  const text = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`.toLowerCase();
+  return (
+    text.includes("permission denied")
+    || text.includes("eacces")
+    || text.includes("access denied")
+    || text.includes("operation not permitted")
+    || text.includes("must be root")
+    || text.includes("requires root")
+    || text.includes("sudo")
+    || text.includes("authentication is required")
+  );
+}
+
+function isRootUser() {
+  return typeof process.getuid === "function" && process.getuid() === 0;
+}
+
+function canUseSudoWithoutPrompt() {
+  try {
+    execSync("sudo -n true", { stdio: "ignore", shell: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function tailscalePermissionRemediation() {
+  return [
+    "Tailscale requires elevated permissions on this host.",
+    "Run these commands in your terminal, then click Start Installation again:",
+    "1) sudo tailscale set --operator=$USER",
+    "2) sudo tailscale up",
+    "3) tailscale status",
+  ].join("\n");
+}
+
+function privilegeRemediationMessage(cmd, args = [], customLines = []) {
+  const command = buildCommandString(cmd, args);
+  const lines = [
+    "This step needs elevated privileges on this host.",
+    "Run this command in your terminal, then click Start Installation again:",
+    `sudo ${command}`,
+  ];
+  if (customLines.length > 0) {
+    lines.push(...customLines);
+  }
+  return lines.join("\n");
+}
+
 function runCommandWithEvents(cmd, args = [], opts = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
@@ -57,7 +117,8 @@ function runCommandWithEvents(cmd, args = [], opts = {}) {
       const urls = [...new Set([...extractUrls(stdout), ...extractUrls(stderr)])];
       if (code === 0) resolve({ stdout, stderr, code, urls });
       else {
-        const err = new Error(`command failed with exit code ${code}`);
+        const stderrPreview = (stderr || "").trim().split("\n").slice(-6).join("\n");
+        const err = new Error(stderrPreview ? `command failed with exit code ${code}: ${stderrPreview}` : `command failed with exit code ${code}`);
         err.code = code;
         err.stdout = stdout;
         err.stderr = stderr;
@@ -204,6 +265,19 @@ export class InstallerStepEngine {
     };
   }
 
+  async runWithPrivilegeGuidance(stepId, cmd, args = [], customLines = []) {
+    try {
+      return await runCommandWithEvents(cmd, args, {
+        onEvent: (evt) => this.emitLog(stepId, evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+      });
+    } catch (err) {
+      if (isPrivilegeError(err)) {
+        throw new Error(privilegeRemediationMessage(cmd, args, customLines));
+      }
+      throw err;
+    }
+  }
+
   emitStep(stepId, status, detail = "") {
     this.hooks.onStepEvent({ at: nowIso(), stepId, status, detail });
   }
@@ -232,27 +306,73 @@ export class InstallerStepEngine {
   async ensureTailscale() {
     if (commandExists("tailscale")) return { installed: true, alreadyInstalled: true };
     if (!this.options.autoInstallDeps) throw new Error("tailscale missing and auto-install disabled");
-    await runCommandWithEvents("bash", ["-lc", "curl -fsSL https://tailscale.com/install.sh | sh"], {
-      onEvent: (evt) => this.emitLog("tailscale", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
-    });
+
+    if (!isRootUser() && !canUseSudoWithoutPrompt()) {
+      throw new Error(
+        [
+          "Tailscale is not installed and the installer cannot elevate privileges automatically.",
+          "Run this command in your terminal, then click Start Installation again:",
+          "sudo bash -lc 'curl -fsSL https://tailscale.com/install.sh | sh'",
+        ].join("\n"),
+      );
+    }
+
+    try {
+      if (isRootUser()) {
+        await this.runWithPrivilegeGuidance("tailscale", "bash", ["-lc", "curl -fsSL https://tailscale.com/install.sh | sh"]);
+      } else {
+        await this.runWithPrivilegeGuidance("tailscale", "sudo", ["bash", "-lc", "curl -fsSL https://tailscale.com/install.sh | sh"]);
+      }
+    } catch (err) {
+      const message = `${err?.message || ""} ${err?.stderr || ""}`.toLowerCase();
+      if (message.includes("sudo") || message.includes("password")) {
+        throw new Error(
+          [
+            "Tailscale installation requires terminal sudo approval.",
+            "Run this command in your terminal, then click Start Installation again:",
+            "sudo bash -lc 'curl -fsSL https://tailscale.com/install.sh | sh'",
+          ].join("\n"),
+        );
+      }
+      throw err;
+    }
+
     return { installed: true, alreadyInstalled: false };
   }
 
   async runTailscaleUp() {
-    const result = await runCommandWithEvents("tailscale", ["up"], {
-      onEvent: (evt) => {
-        const url = firstUrl(evt.text);
-        if (url && !this.state.detected.tailscaleApprovalUrl) this.state.detected.tailscaleApprovalUrl = url;
-        this.emitLog("tailscale_up", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []);
-      },
-    });
-    return { ok: true, approvalUrl: this.state.detected.tailscaleApprovalUrl, urls: result.urls || [] };
+    try {
+      const result = await runCommandWithEvents("tailscale", ["up"], {
+        onEvent: (evt) => {
+          const url = firstUrl(evt.text);
+          if (url && !this.state.detected.tailscaleApprovalUrl) this.state.detected.tailscaleApprovalUrl = url;
+          this.emitLog("tailscale_up", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []);
+        },
+      });
+      return { ok: true, approvalUrl: this.state.detected.tailscaleApprovalUrl, urls: result.urls || [] };
+    } catch (err) {
+      const details = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`.toLowerCase();
+      if (
+        details.includes("access denied")
+        || details.includes("checkprefs")
+        || details.includes("prefs write access denied")
+      ) {
+        throw new Error(tailscalePermissionRemediation());
+      }
+      throw err;
+    }
   }
 
   async runFunnel() {
-    await runCommandWithEvents("tailscale", ["funnel", "--bg", "18789"], {
-      onEvent: (evt) => this.emitLog("funnel", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
-    });
+    try {
+      await this.runWithPrivilegeGuidance("funnel", "tailscale", ["funnel", "--bg", "18789"]);
+    } catch (err) {
+      const details = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`.toLowerCase();
+      if (details.includes("access denied") || details.includes("operator")) {
+        throw new Error(tailscalePermissionRemediation());
+      }
+      throw err;
+    }
     const statusOut = getCommandOutput("tailscale funnel status") || "";
     const funnelUrl = firstUrl(statusOut);
     if (funnelUrl) this.state.detected.funnelUrl = funnelUrl;
@@ -292,8 +412,8 @@ export class InstallerStepEngine {
       }
       if (!this.options.skipGatewayBootstrap) {
         await this.runStep("gateway_bootstrap", "Starting OpenClaw gateway and Funnel", async () => {
-          await runCommandWithEvents("openclaw", ["gateway", "install"]);
-          await runCommandWithEvents("openclaw", ["gateway", "restart"]);
+          await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "install"]);
+          await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "restart"]);
           return this.runFunnel();
         });
       }
