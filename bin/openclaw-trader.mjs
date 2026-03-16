@@ -6,6 +6,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
 import { execSync } from "child_process";
+import { createServer } from "http";
 
 const VERSION = "1.0.7";
 const PLUGIN_ID = "solana-trader";
@@ -1111,6 +1112,298 @@ async function cmdConfig(subArgs) {
   process.exit(1);
 }
 
+function parseInstallWizardArgs(args) {
+  const out = {
+    port: 17890,
+    lane: "event-driven",
+    apiKey: "",
+    orchestratorUrl: "https://api.traderclaw.ai",
+    gatewayBaseUrl: "",
+    gatewayToken: "",
+    enableTelegram: false,
+    telegramToken: "",
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const key = args[i];
+    const next = args[i + 1];
+    if (key === "--port" && next) out.port = Number.parseInt(args[++i], 10) || 17890;
+    if (key === "--lane" && next) out.lane = next === "quick-local" ? "quick-local" : "event-driven";
+    if ((key === "--api-key" || key === "-k") && next) out.apiKey = args[++i];
+    if ((key === "--url" || key === "-u") && next) out.orchestratorUrl = args[++i];
+    if ((key === "--gateway-base-url" || key === "-g") && next) out.gatewayBaseUrl = args[++i];
+    if ((key === "--gateway-token" || key === "-t") && next) out.gatewayToken = args[++i];
+    if (key === "--with-telegram") out.enableTelegram = true;
+    if (key === "--telegram-token" && next) out.telegramToken = args[++i];
+  }
+  return out;
+}
+
+function openBrowser(url) {
+  try {
+    execSync(`xdg-open "${url}"`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parseJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk.toString();
+      if (body.length > 1_000_000) {
+        reject(new Error("request body too large"));
+      }
+    });
+    req.on("end", () => {
+      if (!body) return resolve({});
+      try {
+        resolve(JSON.parse(body));
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function wizardHtml(defaults) {
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>TraderClaw Installer Wizard</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, sans-serif; background:#0b1020; color:#e8eef9; margin:0; }
+      .wrap { max-width: 980px; margin: 24px auto; padding: 0 16px; }
+      .card { background:#121a31; border:1px solid #22315a; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+      .grid { display:grid; grid-template-columns:1fr 1fr; gap: 12px; }
+      label { display:block; font-size: 12px; color:#9cb0de; margin-bottom: 4px; }
+      input, select { width:100%; padding:10px; border-radius:8px; border:1px solid #334a87; background:#0d1530; color:#e8eef9; }
+      button { border:0; border-radius:8px; padding:10px 14px; background:#4d7cff; color:#fff; cursor:pointer; font-weight:600; }
+      .muted { color:#9cb0de; font-size:13px; }
+      .ok { color:#78f0a9; } .warn { color:#ffd166; } .err { color:#ff6b6b; }
+      code { background:#0d1530; padding:2px 6px; border-radius:6px; }
+      pre { background:#0d1530; border:1px solid #22315a; border-radius:8px; padding:12px; max-height:300px; overflow:auto; }
+      table { width:100%; border-collapse: collapse; }
+      td, th { border-bottom:1px solid #22315a; padding:8px; font-size:13px; text-align:left; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h2>TraderClaw Linux Installer Wizard</h2>
+        <p class="muted">Runs full install flow with lane-aware setup, Tailscale handling, gateway checks, and optional Telegram setup.</p>
+      </div>
+      <div class="card">
+        <div class="grid">
+          <div>
+            <label>Lane</label>
+            <select id="lane">
+              <option value="event-driven">Event-Driven (recommended)</option>
+              <option value="quick-local">Quick Local (fallback)</option>
+            </select>
+          </div>
+          <div>
+            <label>Orchestrator URL</label>
+            <input id="orchestratorUrl" value="${defaults.orchestratorUrl}" />
+          </div>
+          <div>
+            <label>API Key (optional if signup flow)</label>
+            <input id="apiKey" value="${defaults.apiKey}" />
+          </div>
+          <div>
+            <label>Gateway Base URL (optional override)</label>
+            <input id="gatewayBaseUrl" value="${defaults.gatewayBaseUrl}" />
+          </div>
+          <div>
+            <label>Gateway Token (event-driven)</label>
+            <input id="gatewayToken" value="${defaults.gatewayToken}" />
+          </div>
+          <div>
+            <label>Telegram Token (optional)</label>
+            <input id="telegramToken" value="${defaults.telegramToken}" />
+          </div>
+        </div>
+        <p class="muted">If Telegram token is set, optional Telegram setup is attempted.</p>
+        <button id="start">Start Installation</button>
+      </div>
+      <div class="card">
+        <h3>Status: <span id="status">idle</span></h3>
+        <p class="muted" id="approval"></p>
+        <table>
+          <thead><tr><th>Step</th><th>Status</th><th>Detail</th></tr></thead>
+          <tbody id="steps"></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h3>Live Logs</h3>
+        <pre id="logs"></pre>
+      </div>
+    </div>
+    <script>
+      const stateEl = document.getElementById("status");
+      const approvalEl = document.getElementById("approval");
+      const stepsEl = document.getElementById("steps");
+      const logsEl = document.getElementById("logs");
+      document.getElementById("lane").value = "${defaults.lane}";
+
+      async function startInstall() {
+        const payload = {
+          lane: document.getElementById("lane").value,
+          orchestratorUrl: document.getElementById("orchestratorUrl").value.trim(),
+          apiKey: document.getElementById("apiKey").value.trim(),
+          gatewayBaseUrl: document.getElementById("gatewayBaseUrl").value.trim(),
+          gatewayToken: document.getElementById("gatewayToken").value.trim(),
+          telegramToken: document.getElementById("telegramToken").value.trim()
+        };
+        await fetch("/api/start", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      }
+
+      async function refresh() {
+        const res = await fetch("/api/state");
+        const data = await res.json();
+        stateEl.textContent = data.status || "idle";
+        approvalEl.textContent = data.detected && data.detected.tailscaleApprovalUrl
+          ? "Tailscale approval link: " + data.detected.tailscaleApprovalUrl
+          : "";
+        stepsEl.innerHTML = "";
+        (data.stepResults || []).forEach((row) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = "<td>" + row.stepId + "</td><td>" + row.status + "</td><td>" + (row.error || "") + "</td>";
+          stepsEl.appendChild(tr);
+        });
+        logsEl.textContent = (data.logs || []).map((l) => "[" + l.at + "] " + l.stepId + " " + l.level + " " + l.text).join("\\n");
+      }
+
+      document.getElementById("start").addEventListener("click", startInstall);
+      setInterval(refresh, 1200);
+      refresh();
+    </script>
+  </body>
+</html>`;
+}
+
+async function cmdInstall(args) {
+  const wizard = args.includes("--wizard");
+  if (!wizard) {
+    printError("Only wizard mode is currently supported. Use: traderclaw install --wizard");
+    process.exit(1);
+  }
+
+  const defaults = parseInstallWizardArgs(args);
+  const { createInstallerStepEngine } = await import("./installer-step-engine.mjs");
+  const modeConfig = {
+    pluginPackage: "traderclaw-v1",
+    pluginId: "solana-trader",
+    cliName: "traderclaw",
+    gatewayConfig: "gateway-v1.json5",
+    agents: ["cto", "onchain-analyst", "alpha-signal-analyst", "risk-officer", "strategy-researcher"],
+  };
+
+  const runtime = {
+    status: "idle",
+    logs: [],
+    stepResults: [],
+    detected: {},
+    errors: [],
+  };
+  let running = false;
+
+  const server = createServer(async (req, res) => {
+    const respondJson = (code, payload) => {
+      res.statusCode = code;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(payload));
+    };
+
+    if (req.method === "GET" && req.url === "/") {
+      res.statusCode = 200;
+      res.setHeader("content-type", "text/html; charset=utf-8");
+      res.end(wizardHtml(defaults));
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/api/state") {
+      respondJson(200, runtime);
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/start") {
+      if (running) {
+        respondJson(409, { ok: false, error: "wizard_run_already_in_progress" });
+        return;
+      }
+
+      const body = await parseJsonBody(req).catch(() => ({}));
+      running = true;
+      runtime.status = "running";
+      runtime.logs = [];
+      runtime.stepResults = [];
+      runtime.errors = [];
+      runtime.detected = {};
+      respondJson(202, { ok: true });
+
+      const engine = createInstallerStepEngine(
+        modeConfig,
+        {
+          mode: "light",
+          lane: body.lane || defaults.lane,
+          apiKey: body.apiKey || defaults.apiKey,
+          orchestratorUrl: body.orchestratorUrl || defaults.orchestratorUrl,
+          gatewayBaseUrl: body.gatewayBaseUrl || defaults.gatewayBaseUrl,
+          gatewayToken: body.gatewayToken || defaults.gatewayToken,
+          enableTelegram: Boolean(body.telegramToken || defaults.telegramToken || defaults.enableTelegram),
+          telegramToken: body.telegramToken || defaults.telegramToken,
+          autoInstallDeps: true,
+        },
+        {
+          onStepEvent: (evt) => {
+            const existing = runtime.stepResults.find((s) => s.stepId === evt.stepId);
+            if (!existing) runtime.stepResults.push({ stepId: evt.stepId, status: evt.status, detail: evt.detail || "" });
+            else {
+              existing.status = evt.status;
+              existing.detail = evt.detail || existing.detail;
+            }
+          },
+          onLog: (evt) => {
+            runtime.logs.push(evt);
+          },
+        },
+      );
+
+      const result = await engine.runAll();
+      runtime.status = result.status;
+      runtime.stepResults = result.stepResults || runtime.stepResults;
+      runtime.detected = result.detected || {};
+      runtime.errors = result.errors || [];
+      running = false;
+      return;
+    }
+
+    respondJson(404, { ok: false, error: "not_found" });
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(defaults.port, "127.0.0.1", resolve);
+  });
+
+  const url = `http://127.0.0.1:${defaults.port}`;
+  printSuccess(`Installer wizard is running at ${url}`);
+  if (!openBrowser(url)) {
+    printInfo(`Open this URL in your browser: ${url}`);
+  }
+  printInfo("Press Ctrl+C to stop the wizard server.");
+}
+
 function printHelp() {
   print(`
 TraderClaw V1 CLI v${VERSION}
@@ -1119,6 +1412,7 @@ Usage: traderclaw <command> [options]
 
 Commands:
   setup              Set up the plugin (signup or API key, session, wallet)
+  install            Launch installer flows (--wizard for localhost GUI)
   login              Re-authenticate (challenge flow, new session)
   logout             Revoke current session and clear tokens
   status             Check connection health and wallet status
@@ -1143,6 +1437,8 @@ Config subcommands:
 
 Examples:
   traderclaw setup
+  traderclaw install --wizard
+  traderclaw install --wizard --lane quick-local
   traderclaw setup --signup --user-id my_agent_001
   traderclaw setup --api-key oc_xxx --url https://api.traderclaw.ai
   traderclaw setup --gateway-base-url https://gateway.myhost.ts.net
@@ -1171,6 +1467,9 @@ async function main() {
   switch (command) {
     case "setup":
       await cmdSetup(args.slice(1));
+      break;
+    case "install":
+      await cmdInstall(args.slice(1));
       break;
     case "login":
       await cmdLogin(args.slice(1));

@@ -51,8 +51,16 @@ The setup wizard will:
 That's it. Restart the gateway and start trading:
 
 ```bash
-openclaw gateway --restart
+openclaw gateway restart
 ```
+
+### Optional: Simple localhost installer wizard (Linux-first)
+
+```bash
+traderclaw install --wizard
+```
+
+This opens a localhost UI that runs prechecks, lane-aware setup, gateway validation, optional Telegram setup, and final verification.
 
 ### 3. Run the mandatory startup sequence
 
@@ -153,7 +161,7 @@ If you prefer to configure manually instead of using the CLI, add to `~/.opencla
 Restart the gateway after configuration:
 
 ```bash
-openclaw gateway --restart
+openclaw gateway restart
 ```
 
 ## Available Tools (52)
