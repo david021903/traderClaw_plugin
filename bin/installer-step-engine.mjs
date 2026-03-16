@@ -190,28 +190,6 @@ function ensureOpenResponsesEnabled(configPath = CONFIG_FILE) {
   return configPath;
 }
 
-async function runSetupWizard(modeConfig, options = {}) {
-  if (!commandExists(modeConfig.cliName)) return { ran: false, reason: "cli_not_found" };
-  const args = ["setup", "--url", options.orchestratorUrl || "https://api.traderclaw.ai"];
-  if (options.apiKey) args.push("--api-key", options.apiKey);
-  else args.push("--signup");
-
-  if (options.gatewayBaseUrl && options.gatewayToken) {
-    args.push("--gateway-base-url", options.gatewayBaseUrl, "--gateway-token", options.gatewayToken);
-  } else if (options.skipGatewayRegistration) {
-    args.push("--skip-gateway-registration");
-  }
-
-  try {
-    await runCommandWithEvents(modeConfig.cliName, args, {
-      onEvent: options.onEvent,
-    });
-    return { ran: true, success: true };
-  } catch {
-    return { ran: true, success: false };
-  }
-}
-
 async function restartGateway() {
   if (!commandExists("openclaw")) return { ran: false };
   try {
@@ -259,6 +237,12 @@ function normalizeLane(input) {
   return input === "event-driven" ? "event-driven" : "quick-local";
 }
 
+function shellQuoteForDisplay(value) {
+  const raw = String(value ?? "");
+  if (raw.length === 0) return "''";
+  return `'${raw.replace(/'/g, `'\\''`)}'`;
+}
+
 export class InstallerStepEngine {
   constructor(modeConfig, options = {}, hooks = {}) {
     this.modeConfig = modeConfig;
@@ -290,6 +274,7 @@ export class InstallerStepEngine {
       detected: { funnelUrl: null, tailscaleApprovalUrl: null },
       stepResults: [],
       verifyChecks: [],
+      setupHandoff: null,
       autoRecovery: {
         gatewayModeRecoveryAttempted: false,
         gatewayModeRecoverySucceeded: false,
@@ -498,6 +483,29 @@ export class InstallerStepEngine {
     return { configured: true };
   }
 
+  buildSetupHandoff() {
+    const args = ["setup", "--url", this.options.orchestratorUrl || "https://api.traderclaw.ai"];
+    if (this.options.lane !== "event-driven") {
+      args.push("--skip-gateway-registration");
+    }
+    const gatewayBaseUrl = this.options.gatewayBaseUrl || this.state.detected.funnelUrl || "";
+    if (this.options.lane === "event-driven" && gatewayBaseUrl) {
+      args.push("--gateway-base-url", gatewayBaseUrl);
+    }
+
+    const command = [this.modeConfig.cliName, ...args].map((part) => shellQuoteForDisplay(part)).join(" ");
+    return {
+      pending: true,
+      command,
+      title: "Ready to launch your agentic trading desk",
+      message:
+        "Core install is complete. Final setup is intentionally handed off to your VPS shell so sensitive wallet prompts stay private.",
+      hint:
+        "Run the command in terminal, answer setup prompts, then restart gateway.",
+      restartCommand: "openclaw gateway restart",
+    };
+  }
+
   async runAll() {
     this.state.status = "running";
     this.state.startedAt = nowIso();
@@ -554,16 +562,14 @@ export class InstallerStepEngine {
         return { configPath, restart };
       });
 
-      await this.runStep("setup", "Running traderclaw setup", async () => {
-        const gatewayBaseUrl = this.options.gatewayBaseUrl || this.state.detected.funnelUrl || "";
-        return runSetupWizard(this.modeConfig, {
-          apiKey: this.options.apiKey,
-          orchestratorUrl: this.options.orchestratorUrl,
-          gatewayBaseUrl: this.options.lane === "event-driven" ? gatewayBaseUrl : "",
-          gatewayToken: this.options.lane === "event-driven" ? this.options.gatewayToken : "",
-          skipGatewayRegistration: this.options.lane !== "event-driven",
-          onEvent: (evt) => this.emitLog("setup", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
-        });
+      await this.runStep("setup_handoff", "Preparing secure setup handoff", async () => {
+        const handoff = this.buildSetupHandoff();
+        this.state.setupHandoff = handoff;
+        this.emitLog("setup_handoff", "info", handoff.title);
+        this.emitLog("setup_handoff", "info", handoff.message);
+        this.emitLog("setup_handoff", "info", `Run in VPS shell: ${handoff.command}`);
+        this.emitLog("setup_handoff", "info", `Then run: ${handoff.restartCommand}`);
+        return handoff;
       });
 
       if (!this.options.skipGatewayConfig) {

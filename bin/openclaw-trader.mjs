@@ -1397,6 +1397,7 @@ function wizardHtml(defaults) {
       <div class="card">
         <h3>Status: <span id="status">idle</span></h3>
         <p class="muted" id="approval"></p>
+        <div id="ready" class="ok"></div>
         <pre id="manual" class="err"></pre>
         <table>
           <thead><tr><th>Step</th><th>Status</th><th>Detail</th></tr></thead>
@@ -1411,6 +1412,7 @@ function wizardHtml(defaults) {
     <script>
       const stateEl = document.getElementById("status");
       const approvalEl = document.getElementById("approval");
+      const readyEl = document.getElementById("ready");
       const manualEl = document.getElementById("manual");
       const stepsEl = document.getElementById("steps");
       const logsEl = document.getElementById("logs");
@@ -1439,6 +1441,17 @@ function wizardHtml(defaults) {
         approvalEl.textContent = data.detected && data.detected.tailscaleApprovalUrl
           ? "Tailscale approval link: " + data.detected.tailscaleApprovalUrl
           : "";
+        const setupHandoff = data.setupHandoff;
+        if (data.status === "completed" && setupHandoff && setupHandoff.command) {
+          readyEl.textContent =
+            setupHandoff.title + "\\n" +
+            setupHandoff.message + "\\n" +
+            "Run in VPS shell: " + setupHandoff.command + "\\n" +
+            "Then run: " + (setupHandoff.restartCommand || "openclaw gateway restart");
+        } else {
+          readyEl.textContent = "";
+        }
+
         const errors = data.errors || [];
         manualEl.textContent = errors.length > 0
           ? errors.map((e) => "Step " + (e.stepId || "unknown") + ":\\n" + (e.error || "")).join("\\n\\n")
@@ -1483,6 +1496,7 @@ async function cmdInstall(args) {
     stepResults: [],
     detected: {},
     errors: [],
+    setupHandoff: null,
   };
   let running = false;
 
@@ -1518,6 +1532,7 @@ async function cmdInstall(args) {
       runtime.stepResults = [];
       runtime.errors = [];
       runtime.detected = {};
+      runtime.setupHandoff = null;
       respondJson(202, { ok: true });
 
       const engine = createInstallerStepEngine(
@@ -1553,6 +1568,7 @@ async function cmdInstall(args) {
       runtime.stepResults = result.stepResults || runtime.stepResults;
       runtime.detected = result.detected || {};
       runtime.errors = result.errors || [];
+      runtime.setupHandoff = result.setupHandoff || null;
       running = false;
       return;
     }
