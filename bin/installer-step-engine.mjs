@@ -104,6 +104,18 @@ function gatewayTimeoutRemediation() {
   ].join("\n");
 }
 
+function gatewayModeUnsetRemediation() {
+  return [
+    "Gateway start is blocked because gateway.mode is unset.",
+    "Run these commands in terminal, then click Start Installation again:",
+    "1) cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.bak.$(date +%s) || true",
+    "2) openclaw config set gateway.mode local",
+    "3) openclaw config set gateway.bind loopback",
+    "4) openclaw gateway restart",
+    "5) openclaw gateway status --json",
+  ].join("\n");
+}
+
 function runCommandWithEvents(cmd, args = [], opts = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
@@ -278,6 +290,11 @@ export class InstallerStepEngine {
       detected: { funnelUrl: null, tailscaleApprovalUrl: null },
       stepResults: [],
       verifyChecks: [],
+      autoRecovery: {
+        gatewayModeRecoveryAttempted: false,
+        gatewayModeRecoverySucceeded: false,
+        backupPath: null,
+      },
     };
   }
 
@@ -396,6 +413,82 @@ export class InstallerStepEngine {
     return { funnelUrl };
   }
 
+  readGatewayStatusSnapshot() {
+    const raw = getCommandOutput("openclaw gateway status --json || true");
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  isGatewayHealthy(statusJson) {
+    if (!statusJson || typeof statusJson !== "object") return false;
+    const serviceStatus = statusJson?.service?.runtime?.status;
+    const rpcOk = statusJson?.rpc?.ok === true;
+    return serviceStatus === "running" && rpcOk;
+  }
+
+  async tryAutoRecoverGatewayMode(stepId) {
+    if (this.state.autoRecovery.gatewayModeRecoveryAttempted) {
+      return { attempted: true, success: false, reason: "already_attempted" };
+    }
+    this.state.autoRecovery.gatewayModeRecoveryAttempted = true;
+
+    let config = {};
+    let rawOriginal = "{}\n";
+    try {
+      rawOriginal = readFileSync(CONFIG_FILE, "utf-8");
+      config = JSON.parse(rawOriginal);
+    } catch {
+      config = {};
+    }
+
+    if (!config.gateway) config.gateway = {};
+    const changed = [];
+    if (!config.gateway.mode) {
+      config.gateway.mode = "local";
+      changed.push("gateway.mode=local");
+    }
+    if (!config.gateway.bind) {
+      config.gateway.bind = "loopback";
+      changed.push("gateway.bind=loopback");
+    }
+    if (!Number.isInteger(config.gateway.port)) {
+      config.gateway.port = 18789;
+      changed.push("gateway.port=18789");
+    }
+
+    if (changed.length === 0) {
+      return { attempted: true, success: false, reason: "no_missing_gateway_defaults" };
+    }
+
+    mkdirSync(CONFIG_DIR, { recursive: true });
+    const backupPath = `${CONFIG_FILE}.bak.${Date.now()}`;
+    writeFileSync(backupPath, rawOriginal, "utf-8");
+    writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
+    this.state.autoRecovery.backupPath = backupPath;
+    this.emitLog(stepId, "warn", `Auto-recovery: applied ${changed.join(", ")} with backup at ${backupPath}`);
+
+    try {
+      await this.runWithPrivilegeGuidance(stepId, "openclaw", ["gateway", "stop"]);
+    } catch {
+      // best effort stop
+    }
+    await this.runWithPrivilegeGuidance(stepId, "openclaw", ["gateway", "install"]);
+    await this.runWithPrivilegeGuidance(stepId, "openclaw", ["gateway", "restart"]);
+
+    const status = this.readGatewayStatusSnapshot();
+    const healthy = this.isGatewayHealthy(status);
+    if (healthy) {
+      this.state.autoRecovery.gatewayModeRecoverySucceeded = true;
+      this.emitLog(stepId, "info", "Auto-recovery succeeded: gateway is healthy after restart.");
+      return { attempted: true, success: true, backupPath };
+    }
+    return { attempted: true, success: false, backupPath, reason: "gateway_not_healthy_after_recovery" };
+  }
+
   async runTelegramStep() {
     if (!this.options.enableTelegram) return { skipped: true, reason: "telegram_not_requested" };
     if (!this.options.telegramToken) return { skipped: true, reason: "telegram_token_missing" };
@@ -434,11 +527,20 @@ export class InstallerStepEngine {
             return this.runFunnel();
           } catch (err) {
             const text = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`.toLowerCase();
+            const gatewayModeUnset = text.includes("gateway.mode=local") && text.includes("current: unset");
             if (
               text.includes("gateway restart timed out")
               || text.includes("timed out after 60s waiting for health checks")
               || text.includes("waiting for gateway port")
+              || gatewayModeUnset
             ) {
+              const recovered = await this.tryAutoRecoverGatewayMode("gateway_bootstrap");
+              if (recovered.success) {
+                return this.runFunnel();
+              }
+              if (gatewayModeUnset) {
+                throw new Error(gatewayModeUnsetRemediation());
+              }
               throw new Error(gatewayTimeoutRemediation());
             }
             throw err;
