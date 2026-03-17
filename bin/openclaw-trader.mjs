@@ -8,7 +8,7 @@ import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
 import { execSync } from "child_process";
 import { createServer } from "http";
 
-const VERSION = "1.0.7";
+const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')).version;
 const PLUGIN_ID = "solana-trader";
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
