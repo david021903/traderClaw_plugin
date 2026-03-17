@@ -1520,9 +1520,9 @@ function wizardHtml(defaults) {
           setupCommandEl.textContent = setupHandoff.command;
           restartCommandEl.textContent = setupHandoff.restartCommand || "openclaw gateway restart";
           readyEl.textContent =
-            setupHandoff.title + "\n" +
-            setupHandoff.message + "\n" +
-            "Run in VPS shell: " + setupHandoff.command + "\n" +
+            setupHandoff.title + "\\n" +
+            setupHandoff.message + "\\n" +
+            "Run in VPS shell: " + setupHandoff.command + "\\n" +
             "Then run: " + (setupHandoff.restartCommand || "openclaw gateway restart");
         } else {
           setupCtaEl.classList.add("hidden");
@@ -1534,7 +1534,7 @@ function wizardHtml(defaults) {
 
         const errors = data.errors || [];
         manualEl.textContent = errors.length > 0
-          ? errors.map((e) => "Step " + (e.stepId || "unknown") + ":\n" + (e.error || "")).join("\n\n")
+          ? errors.map((e) => "Step " + (e.stepId || "unknown") + ":\\n" + (e.error || "")).join("\\n\\n")
           : "";
         stepsEl.innerHTML = "";
         (data.stepResults || []).forEach((row) => {
@@ -1542,7 +1542,7 @@ function wizardHtml(defaults) {
           tr.innerHTML = "<td>" + row.stepId + "</td><td>" + row.status + "</td><td>" + (row.error || row.detail || "") + "</td>";
           stepsEl.appendChild(tr);
         });
-        logsEl.textContent = (data.logs || []).map((l) => "[" + l.at + "] " + l.stepId + " " + l.level + " " + l.text).join("\n");
+        logsEl.textContent = (data.logs || []).map((l) => "[" + l.at + "] " + l.stepId + " " + l.level + " " + l.text).join("\\n");
       }
 
       document.getElementById("start").addEventListener("click", startInstall);
