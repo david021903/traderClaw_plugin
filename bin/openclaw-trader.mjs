@@ -1879,12 +1879,22 @@ function wizardHtml(defaults) {
             manualEl.textContent = data.error ? "Unable to close wizard: " + data.error : "Unable to close wizard right now.";
             return;
           }
-          readyEl.textContent = "Wizard completed. Server is shutting down and your shell prompt will return.";
+          finishWizardBtn.textContent = "Finished - shell is ready";
+          readyEl.textContent = "Wizard completed. Server is shutting down and your shell prompt should already be back.";
           manualEl.textContent = "";
         } catch (err) {
+          const msg = err && err.message ? err.message : String(err);
+          const likelyClosed = /failed to fetch|networkerror|network request failed/i.test(msg);
+          if (likelyClosed) {
+            // Server can close immediately after acknowledging /api/finish, which may race the browser fetch.
+            finishWizardBtn.textContent = "Finished - shell is ready";
+            readyEl.textContent = "Wizard finish was requested. Your shell prompt should be back.";
+            manualEl.textContent = "";
+            return;
+          }
           finishWizardBtn.disabled = false;
           finishWizardBtn.textContent = "Finish & Return to Shell";
-          manualEl.textContent = "Unable to close wizard: " + (err && err.message ? err.message : String(err));
+          manualEl.textContent = "Unable to close wizard: " + msg;
         }
       }
 
@@ -2008,7 +2018,7 @@ async function cmdInstall(args) {
         }
         printInfo("Wizard finish requested from browser. Closing server and returning shell prompt.");
         server.close(() => process.exit(0));
-      }, 120);
+      }, 650);
       return;
     }
 
