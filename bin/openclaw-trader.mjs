@@ -1459,6 +1459,7 @@ function wizardHtml(defaults) {
       .cta .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
       .cta a, .cta code { color:#b9ffda; word-break:break-all; }
       .cta button { background:#2f9a5f; padding:8px 10px; font-size:12px; }
+      .cta .important { color:#ffe08a; font-weight:700; margin:8px 0 6px 0; }
       .checkout { background:#10263f; border:1px solid #2e5785; border-radius:12px; padding:18px; }
       .checkout h2 { margin:0 0 8px 0; color:#9ee6ff; font-size:24px; }
       .checkout p { margin:0 0 12px 0; }
@@ -1522,6 +1523,8 @@ function wizardHtml(defaults) {
         <div id="ctaBox" class="hidden">
           <div id="tailscaleCta" class="cta hidden">
             <h4>Approve Tailscale</h4>
+            <p class="important">Important: open the link, complete sign-in, then return to this same wizard page.</p>
+            <p class="muted">After you approve Tailscale in the browser, this installer continues from here automatically.</p>
             <div class="row">
               <a id="tailscaleLink" href="#" target="_blank" rel="noopener noreferrer"></a>
             </div>
@@ -1551,6 +1554,7 @@ function wizardHtml(defaults) {
       <div class="card checkout hidden" id="completionScreen">
         <h2>You Made It - Wizard Complete</h2>
         <p class="muted">TraderClaw core installation is done. Run these 2 commands in your VPS shell to finish setup and go live.</p>
+        <p class="muted">Before trading, continue with the remaining checklist in the install guide: <a href="https://traderclaw-docs.vercel.app/" target="_blank" rel="noopener noreferrer">https://traderclaw-docs.vercel.app/</a></p>
         <p class="ok" id="setupSuccessText"></p>
         <div class="checkout-row">
           <code id="setupCommand"></code>
