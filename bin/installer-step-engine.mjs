@@ -1,4 +1,5 @@
 import { execSync, spawn } from "child_process";
+import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
