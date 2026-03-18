@@ -1,5 +1,5 @@
 import { execSync, spawn } from "child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -171,9 +171,43 @@ async function installPlugin(modeConfig) {
   return { installed: true, available: commandExists(modeConfig.cliName) };
 }
 
+function isPluginAlreadyExistsError(err, pluginId) {
+  const text = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`.toLowerCase();
+  return text.includes("plugin already exists")
+    || text.includes(`/extensions/${String(pluginId || "").toLowerCase()}`);
+}
+
+function backupExistingPluginDir(pluginId, onEvent) {
+  const pluginDir = join(CONFIG_DIR, "extensions", pluginId);
+  if (!existsSync(pluginDir)) return null;
+
+  const backupPath = `${pluginDir}.bak.${Date.now()}`;
+  renameSync(pluginDir, backupPath);
+  if (typeof onEvent === "function") {
+    onEvent({
+      type: "stdout",
+      text: `Detected existing plugin directory. Backed up '${pluginDir}' to '${backupPath}' before reinstall.\n`,
+      urls: [],
+    });
+  }
+  return { pluginDir, backupPath };
+}
+
 async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorUrl) {
   seedPluginConfig(modeConfig, orchestratorUrl || "https://api.traderclaw.ai");
-  await runCommandWithEvents("openclaw", ["plugins", "install", modeConfig.pluginPackage], { onEvent });
+  let recoveredExistingDir = null;
+  try {
+    await runCommandWithEvents("openclaw", ["plugins", "install", modeConfig.pluginPackage], { onEvent });
+  } catch (err) {
+    if (!isPluginAlreadyExistsError(err, modeConfig.pluginId)) {
+      throw err;
+    }
+    recoveredExistingDir = backupExistingPluginDir(modeConfig.pluginId, onEvent);
+    if (!recoveredExistingDir) {
+      throw err;
+    }
+    await runCommandWithEvents("openclaw", ["plugins", "install", modeConfig.pluginPackage], { onEvent });
+  }
   await runCommandWithEvents("openclaw", ["plugins", "enable", modeConfig.pluginId], { onEvent });
   const list = await runCommandWithEvents("openclaw", ["plugins", "list"], { onEvent });
   const doctor = await runCommandWithEvents("openclaw", ["plugins", "doctor"], { onEvent });
@@ -187,6 +221,7 @@ async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorU
     installed: true,
     enabled: true,
     verified: true,
+    recoveredExistingDir,
     list: list.stdout || "",
     doctor: doctor.stdout || "",
   };

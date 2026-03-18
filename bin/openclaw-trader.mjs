@@ -1468,6 +1468,9 @@ function wizardHtml(defaults) {
       .checkout-row button { background:#2d7dff; padding:10px 12px; font-size:13px; }
       .checkout-finish { margin-top:14px; background:#2f9a5f; font-size:14px; padding:10px 14px; }
       .hidden { display:none; }
+      .loading-hint { display:flex; align-items:center; gap:8px; margin-top:8px; color:#9cb0de; font-size:13px; }
+      .spinner { width:14px; height:14px; border:2px solid #334a87; border-top-color:#8daeff; border-radius:50%; animation:spin 0.8s linear infinite; flex:0 0 auto; }
+      @keyframes spin { to { transform:rotate(360deg); } }
     </style>
   </head>
   <body>
@@ -1499,7 +1502,11 @@ function wizardHtml(defaults) {
           <label>LLM API key or token (required)</label>
           <input id="llmCredential" type="password" placeholder="Paste the credential for the selected provider/model" />
           <p class="muted">This credential is written to OpenClaw model provider config so your agent can run. If you skip manual model selection, the installer will choose a safe provider default.</p>
-          <p class="muted" id="llmLoadState">Loading LLM provider catalog...</p>
+          <p class="muted" id="llmLoadState" aria-live="polite">Loading LLM provider catalog...</p>
+          <div id="llmLoadingHint" class="loading-hint" role="status" aria-live="polite">
+            <span class="spinner" aria-hidden="true"></span>
+            <span id="llmLoadingHintText">Fetching provider list...</span>
+          </div>
         </div>
       </div>
       <div class="card" id="startCard">
@@ -1591,6 +1598,8 @@ function wizardHtml(defaults) {
       const llmCredentialEl = document.getElementById("llmCredential");
       const telegramTokenEl = document.getElementById("telegramToken");
       const llmLoadStateEl = document.getElementById("llmLoadState");
+      const llmLoadingHintEl = document.getElementById("llmLoadingHint");
+      const llmLoadingHintTextEl = document.getElementById("llmLoadingHintText");
       const startBtn = document.getElementById("start");
       const llmCardEl = document.getElementById("llmCard");
       const startCardEl = document.getElementById("startCard");
@@ -1599,6 +1608,9 @@ function wizardHtml(defaults) {
       const completionScreenEl = document.getElementById("completionScreen");
       let llmCatalog = { providers: [] };
       let llmCatalogReady = false;
+      let llmCatalogLoading = false;
+      let llmLoadTicker = null;
+      let llmLoadStartedAt = 0;
 
       function hasRequiredInputs() {
         return (
@@ -1611,6 +1623,44 @@ function wizardHtml(defaults) {
 
       function updateStartButtonState() {
         startBtn.disabled = !hasRequiredInputs();
+      }
+
+      function stopLlmLoadTicker() {
+        if (llmLoadTicker) {
+          clearInterval(llmLoadTicker);
+          llmLoadTicker = null;
+        }
+      }
+
+      function setLlmCatalogLoading(loading) {
+        llmCatalogLoading = loading;
+        llmProviderEl.disabled = loading;
+        llmModelManualEl.disabled = loading;
+        llmModelEl.disabled = loading || !llmModelManualEl.checked;
+        if (loading) {
+          llmLoadStartedAt = Date.now();
+          llmLoadingHintEl.classList.remove("hidden");
+          startBtn.textContent = "Loading providers...";
+          const updateHint = () => {
+            const elapsedSeconds = Math.max(1, Math.floor((Date.now() - llmLoadStartedAt) / 1000));
+            if (elapsedSeconds >= 8) {
+              llmLoadingHintTextEl.textContent = "Still loading provider catalog (" + elapsedSeconds + "s). First run can take up to ~20s.";
+              return;
+            }
+            llmLoadingHintTextEl.textContent = "Fetching provider list (" + elapsedSeconds + "s)...";
+          };
+          updateHint();
+          stopLlmLoadTicker();
+          llmLoadTicker = setInterval(updateHint, 1000);
+          updateStartButtonState();
+          return;
+        }
+        stopLlmLoadTicker();
+        llmLoadingHintEl.classList.add("hidden");
+        startBtn.textContent = "Start Installation";
+        llmLoadStartedAt = 0;
+        llmModelEl.disabled = !llmModelManualEl.checked;
+        updateStartButtonState();
       }
 
       function setLlmCatalogReady(ready, message, isError = false) {
@@ -1646,6 +1696,9 @@ function wizardHtml(defaults) {
       }
 
       async function loadLlmCatalog() {
+        setLlmCatalogLoading(true);
+        setSelectOptions(llmProviderEl, [{ value: "", label: "Loading providers..." }], "");
+        setSelectOptions(llmModelEl, [{ value: "", label: "Loading models..." }], "");
         setLlmCatalogReady(false, "Loading LLM provider catalog... this can take a few seconds.");
         try {
           const res = await fetch("/api/llm/options");
@@ -1664,6 +1717,8 @@ function wizardHtml(defaults) {
         } catch (err) {
           setLlmCatalogReady(false, "Failed to load LLM providers. Check OpenClaw and reload this page.", true);
           manualEl.textContent = "Failed to load LLM provider catalog: " + (err && err.message ? err.message : String(err));
+        } finally {
+          setLlmCatalogLoading(false);
         }
       }
 
@@ -1700,7 +1755,9 @@ function wizardHtml(defaults) {
         if (!llmCatalogReady) {
           stateEl.textContent = "blocked";
           readyEl.textContent = "";
-          manualEl.textContent = "LLM provider catalog is still loading. Please wait a few seconds and try again.";
+          manualEl.textContent = llmCatalogLoading
+            ? "LLM provider catalog is still loading. Wait until the loading indicator finishes."
+            : "LLM provider catalog is not ready yet. Reload the page and try again.";
           return;
         }
         stateEl.textContent = "starting";
