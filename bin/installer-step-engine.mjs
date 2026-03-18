@@ -570,6 +570,18 @@ function verifyInstallation(modeConfig, apiKey) {
     const pluginList = getCommandOutput("openclaw plugins list") || "";
     pluginActive = pluginList.toLowerCase().includes(modeConfig.pluginId.toLowerCase());
   }
+  let heartbeatConfigured = false;
+  let cronConfigured = false;
+  try {
+    const config = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+    const agentsList = config?.agents?.list;
+    if (Array.isArray(agentsList)) {
+      heartbeatConfigured = agentsList.some(a => a.heartbeat && a.heartbeat.every);
+    }
+    cronConfigured = config?.cron?.enabled === true && Array.isArray(config?.cron?.jobs) && config.cron.jobs.length > 0;
+  } catch {
+  }
+
   return [
     { label: "OpenClaw platform", ok: commandExists("openclaw"), note: "not in PATH" },
     { label: `Trading CLI (${modeConfig.cliName})`, ok: commandExists(modeConfig.cliName), note: "not in PATH" },
@@ -577,6 +589,8 @@ function verifyInstallation(modeConfig, apiKey) {
     { label: "Configuration file", ok: existsSync(CONFIG_FILE), note: "not created" },
     { label: "LLM provider configured", ok: llmConfigured, note: "missing model provider credential" },
     { label: "Gateway configuration", ok: existsSync(gatewayFile), note: "not found" },
+    { label: "Heartbeat scheduling", ok: heartbeatConfigured, note: "agent will not wake autonomously" },
+    { label: "Cron jobs configured", ok: cronConfigured, note: "scheduled maintenance jobs missing" },
     { label: "API key configured", ok: !!apiKey, note: "needs setup" },
   ];
 }
