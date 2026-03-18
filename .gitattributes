@@ -1,0 +1,5 @@
+# Preserve executable permissions for binary entry points
+bin/openclaw-trader.mjs export-ignore
+bin/*.mjs export-ignore
+bin/*.js export-ignore
+bin/*.sh export-ignore
