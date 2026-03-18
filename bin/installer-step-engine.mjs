@@ -321,6 +321,45 @@ function fallbackModelForProvider(provider) {
   return `${provider}/default`;
 }
 
+function modelDateScore(modelId) {
+  const match = String(modelId || "").match(/-(\d{8})$/);
+  if (!match) return 0;
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function choosePreferredProviderModel(provider, models = []) {
+  const items = Array.isArray(models) ? models.filter(Boolean) : [];
+  if (items.length === 0) return "";
+
+  const knownBad = new Set([
+    // Frequently present in catalogs but can 404 for message requests.
+    "anthropic/claude-3-5-haiku-20241022",
+  ]);
+
+  const ranked = items
+    .map((modelId) => {
+      let score = 0;
+      const id = String(modelId);
+      const lower = id.toLowerCase();
+
+      if (knownBad.has(id)) score -= 1000000;
+      if (lower.includes("latest")) score += 100000;
+
+      if (provider === "anthropic") {
+        if (lower.includes("claude-sonnet")) score += 50000;
+        else if (lower.includes("claude-opus")) score += 40000;
+        else if (lower.includes("claude-haiku")) score += 20000;
+      }
+
+      score += modelDateScore(id);
+      return { id, score };
+    })
+    .sort((a, b) => (b.score - a.score) || a.id.localeCompare(b.id));
+
+  return ranked[0]?.id || items[0];
+}
+
 function providerEnvKey(provider) {
   if (provider === "anthropic") return "ANTHROPIC_API_KEY";
   if (provider === "openai" || provider === "openai-codex") return "OPENAI_API_KEY";
@@ -346,7 +385,13 @@ function resolveLlmModelSelection(provider, requestedModel) {
   }
 
   if (availableModels.length > 0) {
-    return { model: availableModels[0], source: "provider_default", availableModels, warnings };
+    const chosen = choosePreferredProviderModel(provider, availableModels);
+    if (chosen && chosen !== availableModels[0]) {
+      warnings.push(
+        `Auto-selected '${chosen}' from provider catalog (more stable default than '${availableModels[0]}').`,
+      );
+    }
+    return { model: chosen || availableModels[0], source: "provider_default", availableModels, warnings };
   }
 
   warnings.push(`No discoverable model list found for provider '${provider}'. Falling back to '${fallbackModelForProvider(provider)}'.`);
