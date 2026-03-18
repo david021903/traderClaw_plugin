@@ -1313,10 +1313,10 @@ async function cmdPrecheck(args) {
 
   log.info("Manual staging run commands:");
   log.info("  1) traderclaw install --wizard");
-  log.info("  2) Select lane: event-driven");
+  log.info("  2) In wizard, set LLM provider + credential and Telegram token");
   log.info("  3) Approve tailscale login in provided URL");
   log.info("  4) Confirm /v1/responses returns non-404 on funnel host");
-  log.info("  5) Optional telegram setup + probe");
+  log.info("  5) Verify Telegram channel setup + probe");
   log.info("  6) Startup prompt check: solana_system_status, solana_alpha_subscribe, solana_positions");
   log.info(`Precheck summary: pass=${log.counters.pass} fail=${log.counters.fail} warn=${log.counters.warn}`);
 
