@@ -971,6 +971,15 @@ export class InstallerStepEngine {
         return { configPath, restart };
       });
 
+      await this.runStep("gateway_scheduling", "Configuring heartbeat and cron schedules", async () => {
+        const result = configureGatewayScheduling(this.modeConfig, CONFIG_FILE);
+        this.emitLog("gateway_scheduling", "info", `Agents configured: ${result.agentsConfigured}`);
+        this.emitLog("gateway_scheduling", "info", `Cron jobs: ${result.cronJobsAdded} added, ${result.cronJobsUpdated} updated, ${result.cronJobsTotal} total`);
+        this.emitLog("gateway_scheduling", "info", `Webhook hooks: ${result.hooksConfigured}`);
+        const restart = await restartGateway();
+        return { ...result, restart };
+      });
+
       await this.runStep("setup_handoff", "Preparing secure setup handoff", async () => {
         const handoff = this.buildSetupHandoff();
         this.state.setupHandoff = handoff;
