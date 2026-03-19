@@ -159,7 +159,7 @@ If you prefer to configure manually instead of using the CLI, add to `~/.opencla
           orchestratorUrl: "https://api.traderclaw.ai",
           walletId: 1,
           apiKey: "sk_live_your_key_here",
-          apiTimeout: 30000  // optional, default 30s
+          apiTimeout: 120000  // optional, default 120s
         }
       }
     }

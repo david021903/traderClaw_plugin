@@ -364,7 +364,7 @@ export class SessionManager {
   }
 
   async getAccessToken(): Promise<string> {
-    if (this.accessToken && Date.now() < this.accessTokenExpiresAt - 30000) {
+    if (this.accessToken && Date.now() < this.accessTokenExpiresAt - 120000) {
       return this.accessToken;
     }
 

@@ -291,7 +291,7 @@ async function cmdSetup(args: string[]) {
     orchestratorUrl,
     walletId,
     apiKey,
-    apiTimeout: 30000,
+    apiTimeout: 120000,
   };
   setPluginConfig(existingConfig, pluginConfig);
   writeConfig(existingConfig);
@@ -431,7 +431,7 @@ async function cmdConfig(subArgs: string[]) {
     print(`  Orchestrator URL: ${pluginConfig.orchestratorUrl || "not set"}`);
     print(`  Wallet ID:        ${pluginConfig.walletId ?? "not set"}`);
     print(`  API Key:          ${pluginConfig.apiKey ? maskKey(pluginConfig.apiKey as string) : "not set"}`);
-    print(`  API Timeout:      ${pluginConfig.apiTimeout || 30000}ms`);
+    print(`  API Timeout:      ${pluginConfig.apiTimeout || 120000}ms`);
     print("=".repeat(45));
     print("");
     return;

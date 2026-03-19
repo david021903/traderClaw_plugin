@@ -31,7 +31,7 @@ function parseConfig(raw: unknown): PluginConfig {
   const refreshToken = typeof obj.refreshToken === "string" ? obj.refreshToken : undefined;
   const walletPublicKey = typeof obj.walletPublicKey === "string" ? obj.walletPublicKey : undefined;
   const walletPrivateKey = typeof obj.walletPrivateKey === "string" ? obj.walletPrivateKey : undefined;
-  const apiTimeout = typeof obj.apiTimeout === "number" ? obj.apiTimeout : 30000;
+  const apiTimeout = typeof obj.apiTimeout === "number" ? obj.apiTimeout : 120000;
   const agentId = typeof obj.agentId === "string" ? obj.agentId : undefined;
   const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : undefined;
   const gatewayToken = typeof obj.gatewayToken === "string" ? obj.gatewayToken : undefined;
