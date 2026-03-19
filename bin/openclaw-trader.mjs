@@ -542,7 +542,7 @@ async function cmdSetup(args) {
     orchestratorUrl,
     walletId: null,
     apiKey,
-    apiTimeout: 30000,
+    apiTimeout: 80000,
     refreshToken: undefined,
     walletPublicKey: undefined,
     walletPrivateKey: walletPrivateKey || undefined,
