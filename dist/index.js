@@ -6,13 +6,654 @@ import {
 } from "./chunk-3YPZOXWE.js";
 import {
   orchestratorRequest
-} from "./chunk-OIWH6XY6.js";
+} from "./chunk-T4YWGIIR.js";
 import {
   SessionManager
 } from "./chunk-OITJKCHL.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
+
+// lib/x-client.mjs
+import { createHmac, randomBytes } from "crypto";
+var X_API_BASE = "https://api.twitter.com/2";
+function percentEncode(str) {
+  return encodeURIComponent(str).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+function generateNonce() {
+  return randomBytes(16).toString("hex");
+}
+function generateTimestamp() {
+  return Math.floor(Date.now() / 1e3).toString();
+}
+function buildBaseString(method, url, params) {
+  const sorted = Object.keys(params).sort().map((k) => `${percentEncode(k)}=${percentEncode(params[k])}`).join("&");
+  return `${method.toUpperCase()}&${percentEncode(url)}&${percentEncode(sorted)}`;
+}
+function signRequest(method, url, oauthParams, consumerSecret, tokenSecret) {
+  const baseString = buildBaseString(method, url, oauthParams);
+  const signingKey = `${percentEncode(consumerSecret)}&${percentEncode(tokenSecret)}`;
+  return createHmac("sha1", signingKey).update(baseString).digest("base64");
+}
+function buildAuthHeader(method, url, credentials, queryParams = {}) {
+  const oauthParams = {
+    oauth_consumer_key: credentials.consumerKey,
+    oauth_nonce: generateNonce(),
+    oauth_signature_method: "HMAC-SHA1",
+    oauth_timestamp: generateTimestamp(),
+    oauth_token: credentials.accessToken,
+    oauth_version: "1.0",
+    ...queryParams
+  };
+  const signature = signRequest(
+    method,
+    url,
+    oauthParams,
+    credentials.consumerSecret,
+    credentials.accessTokenSecret
+  );
+  oauthParams.oauth_signature = signature;
+  const headerParts = Object.keys(oauthParams).filter((k) => k.startsWith("oauth_")).sort().map((k) => `${percentEncode(k)}="${percentEncode(oauthParams[k])}"`).join(", ");
+  return `OAuth ${headerParts}`;
+}
+async function xApiFetch(method, endpoint, credentials, { body = null, queryParams = {} } = {}) {
+  const url = `${X_API_BASE}${endpoint}`;
+  const queryString = Object.keys(queryParams).length > 0 ? "?" + Object.entries(queryParams).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&") : "";
+  const fullUrl = `${url}${queryString}`;
+  const authHeader = buildAuthHeader(method, url, credentials, method === "GET" ? queryParams : {});
+  const headers = {
+    Authorization: authHeader,
+    "User-Agent": "TraderClaw-Team/1.0"
+  };
+  const fetchOpts = { method, headers };
+  if (body && method !== "GET") {
+    headers["Content-Type"] = "application/json";
+    fetchOpts.body = JSON.stringify(body);
+  }
+  const response = await fetch(fullUrl, fetchOpts);
+  const responseText = await response.text();
+  let responseData;
+  try {
+    responseData = JSON.parse(responseText);
+  } catch {
+    responseData = { raw: responseText };
+  }
+  const rateLimitRemaining = response.headers.get("x-rate-limit-remaining");
+  const rateLimitReset = response.headers.get("x-rate-limit-reset");
+  if (!response.ok) {
+    if (response.status === 429) {
+      const resetTime = rateLimitReset ? new Date(parseInt(rateLimitReset) * 1e3).toISOString() : "unknown";
+      return {
+        ok: false,
+        error: `Rate limited. Resets at ${resetTime}.`,
+        status: 429,
+        resetAt: resetTime,
+        data: responseData
+      };
+    }
+    if (response.status === 401) {
+      return {
+        ok: false,
+        error: "Authentication failed. Check your X API credentials (consumer key/secret and access token/secret). Ensure the app has Read+Write permissions and tokens were regenerated after permission change.",
+        status: 401,
+        data: responseData
+      };
+    }
+    if (response.status === 403) {
+      return {
+        ok: false,
+        error: "Forbidden. Your X API tier may not support this endpoint. Free tier is write-only (posting). Upgrade to Basic ($200/mo) or pay-as-you-go for read access (mentions, search).",
+        status: 403,
+        data: responseData
+      };
+    }
+    return {
+      ok: false,
+      error: `X API error ${response.status}: ${responseData?.detail || responseData?.title || responseText.slice(0, 200)}`,
+      status: response.status,
+      data: responseData
+    };
+  }
+  return {
+    ok: true,
+    status: response.status,
+    data: responseData,
+    rateLimitRemaining: rateLimitRemaining ? parseInt(rateLimitRemaining) : void 0
+  };
+}
+async function readMentions(credentials, { maxResults = 10, sinceId = null, paginationToken = null } = {}) {
+  if (!credentials.userId) {
+    return { ok: false, error: "userId is required to read mentions. Set it in the agent's X profile config." };
+  }
+  const queryParams = {
+    max_results: String(Math.min(Math.max(maxResults, 5), 100)),
+    "tweet.fields": "created_at,author_id,conversation_id,in_reply_to_user_id,text",
+    expansions: "author_id",
+    "user.fields": "username,name"
+  };
+  if (sinceId) queryParams.since_id = sinceId;
+  if (paginationToken) queryParams.pagination_token = paginationToken;
+  const result = await xApiFetch("GET", `/users/${credentials.userId}/mentions`, credentials, { queryParams });
+  if (result.ok) {
+    const tweets = result.data?.data || [];
+    const users = result.data?.includes?.users || [];
+    const userMap = Object.fromEntries(users.map((u) => [u.id, u]));
+    return {
+      ok: true,
+      mentions: tweets.map((t) => ({
+        id: t.id,
+        text: t.text,
+        authorId: t.author_id,
+        authorUsername: userMap[t.author_id]?.username || "unknown",
+        authorName: userMap[t.author_id]?.name || "unknown",
+        createdAt: t.created_at,
+        conversationId: t.conversation_id
+      })),
+      nextToken: result.data?.meta?.next_token || null,
+      resultCount: result.data?.meta?.result_count || 0
+    };
+  }
+  return result;
+}
+async function searchTweets(credentials, query, { maxResults = 10, sinceId = null, paginationToken = null } = {}) {
+  if (!query || typeof query !== "string" || query.trim().length === 0) {
+    return { ok: false, error: "Search query is required." };
+  }
+  const queryParams = {
+    query: query.trim(),
+    max_results: String(Math.min(Math.max(maxResults, 10), 100)),
+    "tweet.fields": "created_at,author_id,public_metrics,conversation_id,text",
+    expansions: "author_id",
+    "user.fields": "username,name,public_metrics"
+  };
+  if (sinceId) queryParams.since_id = sinceId;
+  if (paginationToken) queryParams.next_token = paginationToken;
+  const result = await xApiFetch("GET", "/tweets/search/recent", credentials, { queryParams });
+  if (result.ok) {
+    const tweets = result.data?.data || [];
+    const users = result.data?.includes?.users || [];
+    const userMap = Object.fromEntries(users.map((u) => [u.id, u]));
+    return {
+      ok: true,
+      tweets: tweets.map((t) => ({
+        id: t.id,
+        text: t.text,
+        authorId: t.author_id,
+        authorUsername: userMap[t.author_id]?.username || "unknown",
+        authorName: userMap[t.author_id]?.name || "unknown",
+        createdAt: t.created_at,
+        metrics: t.public_metrics || {},
+        conversationId: t.conversation_id
+      })),
+      nextToken: result.data?.meta?.next_token || null,
+      resultCount: result.data?.meta?.result_count || 0
+    };
+  }
+  return result;
+}
+async function getThread(credentials, tweetId, { maxResults = 20 } = {}) {
+  if (!tweetId || typeof tweetId !== "string") {
+    return { ok: false, error: "tweetId is required to get a thread." };
+  }
+  const queryParams = {
+    query: `conversation_id:${tweetId}`,
+    max_results: String(Math.min(Math.max(maxResults, 10), 100)),
+    "tweet.fields": "created_at,author_id,in_reply_to_user_id,conversation_id,text,public_metrics",
+    expansions: "author_id",
+    "user.fields": "username,name"
+  };
+  const result = await xApiFetch("GET", "/tweets/search/recent", credentials, { queryParams });
+  if (result.ok) {
+    const tweets = result.data?.data || [];
+    const users = result.data?.includes?.users || [];
+    const userMap = Object.fromEntries(users.map((u) => [u.id, u]));
+    return {
+      ok: true,
+      conversationId: tweetId,
+      replies: tweets.map((t) => ({
+        id: t.id,
+        text: t.text,
+        authorId: t.author_id,
+        authorUsername: userMap[t.author_id]?.username || "unknown",
+        createdAt: t.created_at,
+        metrics: t.public_metrics || {}
+      })),
+      resultCount: tweets.length
+    };
+  }
+  return result;
+}
+
+// lib/x-tools.mjs
+function parseXConfig(obj) {
+  const xRaw = obj?.x && typeof obj.x === "object" && !Array.isArray(obj.x) ? obj.x : {};
+  const consumerKey = typeof xRaw.consumerKey === "string" ? xRaw.consumerKey : process.env.X_CONSUMER_KEY || "";
+  const consumerSecret = typeof xRaw.consumerSecret === "string" ? xRaw.consumerSecret : process.env.X_CONSUMER_SECRET || "";
+  const profiles = {};
+  if (xRaw.profiles && typeof xRaw.profiles === "object" && !Array.isArray(xRaw.profiles)) {
+    for (const [key, val] of Object.entries(xRaw.profiles)) {
+      if (val && typeof val === "object" && !Array.isArray(val)) {
+        const envPrefix2 = `X_ACCESS_TOKEN_${key.toUpperCase().replace(/-/g, "_")}`;
+        const accessToken = typeof val.accessToken === "string" ? val.accessToken : process.env[envPrefix2] || "";
+        const accessTokenSecret = typeof val.accessTokenSecret === "string" ? val.accessTokenSecret : process.env[`${envPrefix2}_SECRET`] || "";
+        if (accessToken && accessTokenSecret) {
+          profiles[key] = {
+            accessToken,
+            accessTokenSecret,
+            userId: typeof val.userId === "string" ? val.userId : void 0,
+            username: typeof val.username === "string" ? val.username : void 0
+          };
+        }
+      }
+    }
+  }
+  const defaultAgentId = typeof obj?.agentId === "string" ? obj.agentId : "main";
+  const envPrefix = `X_ACCESS_TOKEN_${defaultAgentId.toUpperCase().replace(/-/g, "_")}`;
+  const envAccessToken = process.env[envPrefix] || "";
+  const envAccessTokenSecret = process.env[`${envPrefix}_SECRET`] || "";
+  if (!profiles[defaultAgentId] && envAccessToken && envAccessTokenSecret) {
+    profiles[defaultAgentId] = { accessToken: envAccessToken, accessTokenSecret: envAccessTokenSecret };
+  }
+  if (consumerKey && consumerSecret) {
+    return { ok: true, consumerKey, consumerSecret, profiles };
+  }
+  return { ok: false, consumerKey: "", consumerSecret: "", profiles: {} };
+}
+function resolveAgentCredentials(xConfig, callerAgentId, requestedAgentId, fallbackAgentId) {
+  const agentId = callerAgentId || requestedAgentId || fallbackAgentId || "main";
+  if (!xConfig || !xConfig.ok) {
+    return { ok: false, error: "X/Twitter configuration missing. Set 'x.consumerKey', 'x.consumerSecret', and 'x.profiles.<agentId>' in plugin config, or use X_CONSUMER_KEY / X_CONSUMER_SECRET env vars." };
+  }
+  const profile = xConfig.profiles[agentId];
+  if (!profile) {
+    return { ok: false, error: `No X profile configured for agent '${agentId}'. Available profiles: ${Object.keys(xConfig.profiles).join(", ") || "none"}` };
+  }
+  return {
+    ok: true,
+    agentId,
+    credentials: {
+      consumerKey: xConfig.consumerKey,
+      consumerSecret: xConfig.consumerSecret,
+      accessToken: profile.accessToken,
+      accessTokenSecret: profile.accessTokenSecret,
+      userId: profile.userId || null,
+      username: profile.username || agentId
+    }
+  };
+}
+function registerXReadTools(api, Type2, xConfig, fallbackAgentId, logPrefix, options) {
+  const checkPermission = options?.checkPermission || null;
+  const json = (data) => ({
+    content: [{ type: "text", text: JSON.stringify(data, null, 2) }]
+  });
+  const wrapExecute = (toolName, fn) => async (toolCallId, params) => {
+    try {
+      if (checkPermission) {
+        const callingAgentId = params?._agentId || fallbackAgentId;
+        const permError = checkPermission(toolName, callingAgentId);
+        if (permError) {
+          return json({ error: permError, tool: toolName, agentId: callingAgentId });
+        }
+      }
+      const result = await fn(toolCallId, params ?? {});
+      return json(result);
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+  api.registerTool({
+    name: "x_search_tweets",
+    description: "Search recent tweets on X/Twitter by keyword, hashtag, cashtag, or advanced query. Use for social research: token sentiment, narrative detection, influencer monitoring, KOL tracking. Requires pay-as-you-go or Basic tier X API access.",
+    parameters: Type2.Object({
+      query: Type2.String({ description: "Search query. Examples: '$BONK sentiment', 'solana memecoin', 'from:elonmusk crypto', '#SOL', 'conversation_id:123'" }),
+      maxResults: Type2.Optional(Type2.Number({ description: "Number of results (10-100, default: 10)" })),
+      sinceId: Type2.Optional(Type2.String({ description: "Only return tweets newer than this tweet ID" })),
+      paginationToken: Type2.Optional(Type2.String({ description: "Pagination token from a previous response" })),
+      agentId: Type2.Optional(Type2.String({ description: "Override agent ID (default: caller's agent identity)" }))
+    }),
+    execute: wrapExecute("x_search_tweets", async (_id, params) => {
+      const callerAgentId = params._agentId;
+      const creds = resolveAgentCredentials(xConfig, callerAgentId, params.agentId, fallbackAgentId);
+      if (!creds.ok) return { error: creds.error };
+      return searchTweets(creds.credentials, params.query, {
+        maxResults: params.maxResults,
+        sinceId: params.sinceId,
+        paginationToken: params.paginationToken
+      });
+    })
+  });
+  api.registerTool({
+    name: "x_read_mentions",
+    description: "Read recent @mentions of the configured X profile. Use for monitoring community reactions and engagement. Requires pay-as-you-go or Basic tier X API access.",
+    parameters: Type2.Object({
+      maxResults: Type2.Optional(Type2.Number({ description: "Number of mentions to return (5-100, default: 10)" })),
+      sinceId: Type2.Optional(Type2.String({ description: "Only return mentions newer than this tweet ID" })),
+      paginationToken: Type2.Optional(Type2.String({ description: "Pagination token from a previous response" })),
+      agentId: Type2.Optional(Type2.String({ description: "Override agent ID (default: caller's agent identity)" }))
+    }),
+    execute: wrapExecute("x_read_mentions", async (_id, params) => {
+      const callerAgentId = params._agentId;
+      const creds = resolveAgentCredentials(xConfig, callerAgentId, params.agentId, fallbackAgentId);
+      if (!creds.ok) return { error: creds.error };
+      return readMentions(creds.credentials, {
+        maxResults: params.maxResults,
+        sinceId: params.sinceId,
+        paginationToken: params.paginationToken
+      });
+    })
+  });
+  api.registerTool({
+    name: "x_get_thread",
+    description: "Read a full conversation thread on X/Twitter by tweet ID. Use for understanding context around viral posts or influencer discussions. Requires pay-as-you-go or Basic tier X API access.",
+    parameters: Type2.Object({
+      tweetId: Type2.String({ description: "The tweet ID to get the conversation thread for" }),
+      maxResults: Type2.Optional(Type2.Number({ description: "Max replies to return (10-100, default: 20)" })),
+      agentId: Type2.Optional(Type2.String({ description: "Override agent ID (default: caller's agent identity)" }))
+    }),
+    execute: wrapExecute("x_get_thread", async (_id, params) => {
+      const callerAgentId = params._agentId;
+      const creds = resolveAgentCredentials(xConfig, callerAgentId, params.agentId, fallbackAgentId);
+      if (!creds.ok) return { error: creds.error };
+      return getThread(creds.credentials, params.tweetId, {
+        maxResults: params.maxResults
+      });
+    })
+  });
+  api.logger.info(`${logPrefix} Registered 3 X/Twitter read tools (search, mentions, threads). Profiles: ${xConfig.ok ? Object.keys(xConfig.profiles).join(", ") || "none" : "unconfigured"}`);
+}
+
+// lib/web-fetch.mjs
+import { lookup } from "node:dns/promises";
+var BLOCKED_HOSTS = /* @__PURE__ */ new Set([
+  "localhost",
+  "127.0.0.1",
+  "0.0.0.0",
+  "::1",
+  "metadata.google.internal",
+  "169.254.169.254"
+]);
+var MAX_BODY_BYTES = 512 * 1024;
+var FETCH_TIMEOUT_MS = 1e4;
+var MAX_OUTPUT_CHARS = 8e3;
+function isPrivateIp(ip) {
+  if (ip === "127.0.0.1" || ip === "::1" || ip === "0.0.0.0") return true;
+  if (ip.startsWith("10.")) return true;
+  if (ip.startsWith("192.168.")) return true;
+  if (ip.startsWith("169.254.")) return true;
+  if (ip.startsWith("fc") || ip.startsWith("fd")) return true;
+  if (ip.startsWith("fe80")) return true;
+  const parts = ip.split(".");
+  if (parts.length === 4 && parts[0] === "172") {
+    const second = parseInt(parts[1], 10);
+    if (second >= 16 && second <= 31) return true;
+  }
+  return false;
+}
+async function isBlockedUrl(urlStr) {
+  let parsed;
+  try {
+    parsed = new URL(urlStr);
+  } catch {
+    return { blocked: true, reason: "Invalid URL" };
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return { blocked: true, reason: `Blocked scheme: ${parsed.protocol}` };
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (BLOCKED_HOSTS.has(host)) {
+    return { blocked: true, reason: `Blocked host: ${host}` };
+  }
+  if (isPrivateIp(host)) {
+    return { blocked: true, reason: `Blocked private IP: ${host}` };
+  }
+  try {
+    const resolved = await lookup(host);
+    if (isPrivateIp(resolved.address)) {
+      return { blocked: true, reason: `Host ${host} resolves to private IP ${resolved.address}` };
+    }
+  } catch {
+    return { blocked: true, reason: `DNS resolution failed for ${host}` };
+  }
+  return { blocked: false };
+}
+function stripHtml(html) {
+  let text = html;
+  text = text.replace(/<script[\s\S]*?<\/script>/gi, "");
+  text = text.replace(/<style[\s\S]*?<\/style>/gi, "");
+  text = text.replace(/<nav[\s\S]*?<\/nav>/gi, "");
+  text = text.replace(/<footer[\s\S]*?<\/footer>/gi, "");
+  text = text.replace(/<!--[\s\S]*?-->/g, "");
+  text = text.replace(/<[^>]+>/g, " ");
+  text = text.replace(/&nbsp;/gi, " ");
+  text = text.replace(/&amp;/gi, "&");
+  text = text.replace(/&lt;/gi, "<");
+  text = text.replace(/&gt;/gi, ">");
+  text = text.replace(/&quot;/gi, '"');
+  text = text.replace(/&#39;/gi, "'");
+  text = text.replace(/\s+/g, " ");
+  return text.trim();
+}
+function extractTitle(html) {
+  const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return m ? m[1].replace(/<[^>]+>/g, "").trim() : null;
+}
+function extractMetaDescription(html) {
+  const m = html.match(/<meta[^>]+name\s*=\s*["']description["'][^>]+content\s*=\s*["']([\s\S]*?)["'][^>]*>/i) || html.match(/<meta[^>]+content\s*=\s*["']([\s\S]*?)["'][^>]+name\s*=\s*["']description["'][^>]*>/i);
+  return m ? m[1].trim() : null;
+}
+function extractHeadings(html) {
+  const headings = [];
+  const regex = /<h([1-3])[^>]*>([\s\S]*?)<\/h\1>/gi;
+  let match;
+  while ((match = regex.exec(html)) !== null && headings.length < 20) {
+    const text = match[2].replace(/<[^>]+>/g, "").trim();
+    if (text) headings.push({ level: parseInt(match[1], 10), text });
+  }
+  return headings;
+}
+function extractLinks(html, baseUrl) {
+  const links = [];
+  const seen = /* @__PURE__ */ new Set();
+  const regex = /<a[^>]+href\s*=\s*["']([^"'#]+?)["'][^>]*>/gi;
+  let match;
+  while ((match = regex.exec(html)) !== null && links.length < 30) {
+    let href = match[1].trim();
+    if (href.startsWith("mailto:") || href.startsWith("javascript:") || href.startsWith("tel:")) continue;
+    try {
+      const resolved = new URL(href, baseUrl).href;
+      if (!seen.has(resolved)) {
+        seen.add(resolved);
+        links.push(resolved);
+      }
+    } catch {
+    }
+  }
+  return links;
+}
+function extractSocialLinks(links) {
+  const social = {};
+  for (const link of links) {
+    const lower = link.toLowerCase();
+    if (lower.includes("twitter.com/") || lower.includes("x.com/")) {
+      if (!social.twitter) social.twitter = link;
+    } else if (lower.includes("t.me/") || lower.includes("telegram.")) {
+      if (!social.telegram) social.telegram = link;
+    } else if (lower.includes("discord.gg/") || lower.includes("discord.com/")) {
+      if (!social.discord) social.discord = link;
+    } else if (lower.includes("github.com/")) {
+      if (!social.github) social.github = link;
+    } else if (lower.includes("medium.com/") || lower.includes(".medium.com")) {
+      if (!social.medium) social.medium = link;
+    }
+  }
+  return social;
+}
+async function readBodyWithLimit(response, maxBytes) {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const buf = await response.arrayBuffer();
+    if (buf.byteLength > maxBytes) throw new Error(`Response too large: ${buf.byteLength} bytes (max ${maxBytes})`);
+    return new Uint8Array(buf);
+  }
+  const chunks = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > maxBytes) {
+      reader.cancel();
+      throw new Error(`Response too large: exceeded ${maxBytes} bytes`);
+    }
+    chunks.push(value);
+  }
+  const result = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+async function fetchUrl(url) {
+  const blockCheck = await isBlockedUrl(url);
+  if (blockCheck.blocked) {
+    return { ok: false, error: blockCheck.reason, url };
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; TraderClaw/1.0; +https://traderclaw.com)",
+        "Accept": "text/html,application/xhtml+xml,application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9"
+      },
+      redirect: "follow"
+    });
+    clearTimeout(timeout);
+    if (!response.ok) {
+      return { ok: false, error: `HTTP ${response.status} ${response.statusText}`, url };
+    }
+    const finalUrl = response.url;
+    const finalCheck = await isBlockedUrl(finalUrl);
+    if (finalCheck.blocked) {
+      return { ok: false, error: `Redirect to blocked URL: ${finalCheck.reason}`, url };
+    }
+    const contentType = response.headers.get("content-type") || "";
+    const isJson = contentType.includes("application/json");
+    const isHtml = contentType.includes("text/html") || contentType.includes("text/xhtml");
+    const isText = contentType.includes("text/plain");
+    let bodyBytes;
+    try {
+      bodyBytes = await readBodyWithLimit(response, MAX_BODY_BYTES);
+    } catch (sizeErr) {
+      return { ok: false, error: sizeErr.message, url };
+    }
+    const raw = new TextDecoder("utf-8", { fatal: false }).decode(bodyBytes);
+    if (isJson) {
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = null;
+      }
+      const jsonStr = parsed ? JSON.stringify(parsed, null, 2) : raw;
+      return {
+        ok: true,
+        url,
+        finalUrl,
+        contentType: "json",
+        title: null,
+        metaDescription: null,
+        headings: [],
+        socialLinks: {},
+        outboundLinks: [],
+        bodyText: jsonStr.slice(0, MAX_OUTPUT_CHARS),
+        bodyTruncated: jsonStr.length > MAX_OUTPUT_CHARS
+      };
+    }
+    if (isHtml || !isText && !isJson) {
+      const title = extractTitle(raw);
+      const metaDescription = extractMetaDescription(raw);
+      const headings = extractHeadings(raw);
+      const allLinks = extractLinks(raw, finalUrl);
+      const socialLinks = extractSocialLinks(allLinks);
+      const bodyText = stripHtml(raw).slice(0, MAX_OUTPUT_CHARS);
+      return {
+        ok: true,
+        url,
+        finalUrl,
+        contentType: "html",
+        title,
+        metaDescription,
+        headings,
+        socialLinks,
+        outboundLinks: allLinks.slice(0, 20),
+        bodyText,
+        bodyTruncated: stripHtml(raw).length > MAX_OUTPUT_CHARS
+      };
+    }
+    return {
+      ok: true,
+      url,
+      finalUrl,
+      contentType: "text",
+      title: null,
+      metaDescription: null,
+      headings: [],
+      socialLinks: {},
+      outboundLinks: [],
+      bodyText: raw.slice(0, MAX_OUTPUT_CHARS),
+      bodyTruncated: raw.length > MAX_OUTPUT_CHARS
+    };
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === "AbortError") {
+      return { ok: false, error: `Request timed out after ${FETCH_TIMEOUT_MS}ms`, url };
+    }
+    return { ok: false, error: err.message || String(err), url };
+  }
+}
+function registerWebFetchTool(api, Type2, logPrefix, options) {
+  const checkPermission = options?.checkPermission || null;
+  const json = (data) => ({
+    content: [{ type: "text", text: JSON.stringify(data, null, 2) }]
+  });
+  api.registerTool({
+    name: "web_fetch_url",
+    description: "Fetch a URL and return its content as structured text. Extracts title, meta description, headings, social links, outbound links, and body text from HTML pages. Returns raw JSON for JSON responses. Use for analyzing token project websites, metadata URIs, and verifying social link legitimacy. Results should be cached in memory \u2014 do not re-fetch the same URL within 48 hours.",
+    parameters: Type2.Object({
+      url: Type2.String({ description: "The URL to fetch (must be http:// or https://)" })
+    }),
+    execute: async (toolCallId, params) => {
+      try {
+        if (checkPermission) {
+          const callingAgentId = params?._agentId || "main";
+          const permError = checkPermission("web_fetch_url", callingAgentId);
+          if (permError) {
+            return json({ error: permError, tool: "web_fetch_url", agentId: callingAgentId });
+          }
+        }
+        const { url } = params;
+        api.logger.info(`${logPrefix} web_fetch_url: fetching ${url}`);
+        const result = await fetchUrl(url);
+        if (!result.ok) {
+          api.logger.warn(`${logPrefix} web_fetch_url failed for ${url}: ${result.error}`);
+          return json({ ok: false, error: result.error, url });
+        }
+        api.logger.info(`${logPrefix} web_fetch_url: success for ${url} (${result.contentType}, title: ${result.title || "none"})`);
+        return json(result);
+      } catch (err) {
+        return json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  });
+  api.logger.info(`${logPrefix} Registered web_fetch_url tool (website analysis, metadata URI inspection)`);
+}
+
+// index.ts
 import * as fs from "fs";
 import * as path from "path";
 function parseConfig(raw) {
@@ -29,6 +670,7 @@ function parseConfig(raw) {
   const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : void 0;
   const gatewayToken = typeof obj.gatewayToken === "string" ? obj.gatewayToken : void 0;
   const dataDir = typeof obj.dataDir === "string" ? obj.dataDir : void 0;
+  const xConfig = parseXConfig(obj);
   return {
     orchestratorUrl,
     walletId,
@@ -41,7 +683,8 @@ function parseConfig(raw) {
     agentId,
     gatewayBaseUrl,
     gatewayToken,
-    dataDir
+    dataDir,
+    xConfig
   };
 }
 var solanaTraderPlugin = {
@@ -1237,7 +1880,7 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_system_status",
-      description: "Check orchestrator system health \u2014 uptime, connected services, database status, execution mode (mock/live), and upstream API connectivity.",
+      description: "Check orchestrator system health \u2014 uptime, connected services, database status, execution mode, and upstream API connectivity.",
       parameters: Type.Object({}),
       execute: wrapExecute(async () => get("/api/system/status"))
     });
@@ -2077,12 +2720,15 @@ Context compaction triggered. MEMORY.md synced from last persisted state. Decisi
         }
       }
     });
+    registerXReadTools(api, Type, config.xConfig, config.agentId || "main", "[solana-trader]");
+    registerWebFetchTool(api, Type, "[solana-trader]");
+    const xToolCount = config.xConfig?.ok ? 3 : 0;
     api.logger.info(
-      `[solana-trader] Registered 66 trading tools for walletId ${walletId} (session auth mode)`
+      `[solana-trader] Registered ${67 + xToolCount} tools (67 trading + ${xToolCount} X/Twitter read) for walletId ${walletId} (session auth mode)`
     );
   }
 };
-var openclaw_plugin_default = solanaTraderPlugin;
+var index_default = solanaTraderPlugin;
 export {
-  openclaw_plugin_default as default
+  index_default as default
 };
