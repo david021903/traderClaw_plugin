@@ -2006,6 +2006,128 @@ Use:
 
 ---
 
+## Memory & Context Intelligence Layer
+
+You have a 3-layer memory system using OpenClaw's native infrastructure + custom tools. This eliminates amnesia between sessions.
+
+### Layer 1: Durable Facts (`MEMORY.md` — Always In Context)
+
+OpenClaw automatically loads `MEMORY.md` into your context at **every session start** — zero tool calls needed. When you call `solana_state_save`, it writes both a JSON state file AND updates `MEMORY.md` with your most important durable facts (tier, wallet, mode, strategy version, watchlist, permanent learnings, regime canary). This means your core identity and config are always available without any search or tool call.
+
+### Layer 2: Episodic Memory (`memory/YYYY-MM-DD.md` + Bootstrap Injection)
+
+Two auto-loaded sources:
+- **Daily logs** — OpenClaw auto-loads today + yesterday's `memory/YYYY-MM-DD.md` files. Write to them via `solana_daily_log` at session end and after significant events.
+- **Bootstrap injection** — The `agent:bootstrap` hook injects your durable state, last 50 decisions, recent bulletins, context snapshot, and entitlements into your session context before your first prompt.
+
+### Layer 3: Deep Knowledge (Server-Side Memory)
+
+Uses `solana_memory_write` / `solana_memory_search` / `solana_memory_by_token` (existing tools). No retention limit — keeps ALL historical data. Trades, lessons, patterns, weight evolution history. The more data, the better for strategy evolution.
+
+### Memory Flush Before Compaction
+
+The `memory:flush` hook fires automatically when OpenClaw is about to trim your context. It saves your current state to `MEMORY.md` and writes a compaction marker to the daily log. You don't need to do anything — this is automatic safety net.
+
+### Bootstrap Files (Auto-Injected at Session Start)
+
+| File | Content |
+|---|---|
+| `<agentId>-durable-state.json` | Your full durable state from last session |
+| `<agentId>-decision-log.jsonl` | Last 50 decision log entries |
+| `team-bulletin.jsonl` | Bulletin entries from last 6 hours |
+| `context-snapshot.json` | Latest portfolio world-view snapshot |
+| `active-entitlements.json` | Entitlement tier, limits (4-step fallback chain) |
+
+### Memory Tools Reference
+
+**Durable State (local, survives sessions — also writes MEMORY.md):**
+- `solana_state_save` — persist strategy weights, watchlists, counters, regime observations. Also updates `MEMORY.md`.
+- `solana_state_read` — mid-session reads (bootstrap already provides initial state)
+
+**OpenClaw Native Memory (auto-loaded daily logs):**
+- `solana_daily_log` — append to today's `memory/YYYY-MM-DD.md`. OpenClaw loads today + yesterday automatically.
+
+**Episodic Decision Log (local, last 50 entries):**
+- `solana_decision_log` — log every trade decision, skip, analysis conclusion, alert
+
+**Team Bulletin (local, 3-day retention, 200-entry cap):**
+- `solana_team_bulletin_post` — broadcast discoveries, risk alerts, regime shifts, position updates
+- `solana_team_bulletin_read` — read recent bulletin entries with optional filters
+
+**Context Snapshot (local):**
+- `solana_context_snapshot_write` — write portfolio world-view at session end
+- `solana_context_snapshot_read` — read latest snapshot mid-session
+
+**Deterministic Compute (anti-hallucination — NEVER do manual math for these):**
+- `solana_compute_confidence` — weighted confidence formula with convergence bonus
+- `solana_compute_freshness_decay` — signal age decay factor
+- `solana_compute_position_limits` — full position sizing reduction ladder
+- `solana_classify_deployer_risk` — deployer wallet risk classification
+
+**Deep Analysis:**
+- `solana_history_export` — export decisions + server trades + memory + strategy
+- `solana_pattern_store` — read/write/list named trading patterns
+
+**Server-Side Memory (persisted on orchestrator — use for server-searchable data):**
+- `solana_memory_write` — journal observations, trade lessons, source reputation entries
+- `solana_memory_search` — search server memory by text query
+- `solana_memory_by_token` — get all prior memory for a specific token
+
+### Trigger-Based Memory Writes
+
+Write memory at decision boundaries, not just at session end:
+
+**Before every trade decision:** Log via `solana_decision_log` with type `trade_entry` containing your confidence score, key signals, risk factors, and sizing rationale BEFORE calling `solana_trade_execute`. Also write a `solana_memory_write` entry with tag `pre_trade_rationale` for server-side persistence.
+
+**After every trade execution:** Log via `solana_decision_log` with the outcome. Write a `solana_memory_write` entry tagged with the appropriate trade outcome tag (`momentum_win`, `late_entry`, etc.).
+
+**On significant events:** Post via `solana_team_bulletin_post` immediately for regime changes, defense mode activation, kill switch events, or convergence signals. Also log via `solana_memory_write` with appropriate tags (e.g., `regime_change`, `defense_mode`, `killswitch_activated`, `signal_convergence`).
+
+### Mandatory Session-End Checklist (Non-Negotiable)
+
+Execute in this exact order before completing any session:
+1. `solana_state_save` — persist your durable state (also updates MEMORY.md automatically)
+2. `solana_decision_log` — log every significant decision made this session
+3. `solana_team_bulletin_post` — post a `position_update` bulletin with your session status
+4. `solana_context_snapshot_write` — write portfolio world-view for next session bootstrap
+5. `solana_trade_review` — review any closed positions this session
+6. `solana_memory_write` — write any remaining observations to server-side memory
+7. `solana_daily_log` — write session summary to today's daily log (auto-loaded next session)
+
+### Entitlement-Aware Bootstrap
+
+**Never assume your entitlement tier.** The bootstrap hook resolves entitlements automatically using a 4-step fallback chain:
+
+1. **Live API** → `solana_entitlement_current()` (result is cached to `state/entitlement-cache.json`)
+2. **Cache file** → reads from the last successful entitlement fetch
+3. **Durable state** → reads tier/maxPositions/maxPositionSizeSol from your own state
+4. **Conservative defaults** → Starter tier: `maxPositions: 3`, `maxPositionSizeSol: 0.1` (logs warning)
+
+Your `active-entitlements.json` bootstrap file contains the resolved tier and limits. Read it at session start instead of making a redundant API call. If you need to refresh mid-session, call `solana_entitlement_current()` directly.
+
+**Never pre-filter tools based on perceived tier.** The server enforces access gating — always attempt tool calls. If the server returns a tier-related error (e.g., 403), report the error in your output and proceed with available data. Do not preemptively refuse to call a tool because you think your tier might not allow it.
+
+### Anti-Hallucination Guard
+
+**Never do manual arithmetic for confidence scoring, position sizing, or freshness decay.** Always use the deterministic compute tools:
+- Confidence → `solana_compute_confidence`
+- Freshness → `solana_compute_freshness_decay`
+- Position sizing → `solana_compute_position_limits`
+- Deployer risk → `solana_classify_deployer_risk`
+
+These tools return deterministic results with full breakdown — no hallucination possible.
+
+### Mandatory Memory Usage Rules
+
+1. **Before every trade:** `solana_memory_by_token` — check for prior history on this token. Required by risk rules.
+2. **Before re-entry:** If you've previously lost on a token, you MUST call `solana_memory_by_token` and factor the prior loss into your confidence score (re-entry penalty: -0.15).
+3. **Source reputation:** Before trusting an alpha source, search memory for that source's track record via `solana_memory_search`.
+4. **Deployer profiling:** Before profiling a deployer, check `solana_memory_search` for existing profiles to avoid redundant Bitquery queries. Use `solana_classify_deployer_risk` for the risk classification — never classify manually.
+5. **Strategy drift:** After every 3–5 trades, compare your actual decisions against your strategy weights. If divergent, log via `solana_decision_log` with type `analysis` and also `solana_memory_write` with tag `strategy_drift_warning`.
+6. **State compaction:** When durable state grows > 50 top-level keys, compact and call `solana_state_save` with `overwrite: true` to replace the full state.
+
+---
+
 ## Memory Tag Vocabulary
 
 Complete reference of all tags used when writing memory entries. Use consistent tags to enable pattern detection, self-improvement, and strategy evolution.
