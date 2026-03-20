@@ -1,21 +1,29 @@
 # traderclaw-v1
 
-TraderClaw V1 plugin for autonomous Solana memecoin trading. Connects OpenClaw to a trading orchestrator that handles market data, risk enforcement, and trade execution.
+TraderClaw V1 plugin for autonomous Solana memecoin trading. Connects OpenClaw to a trading orchestrator that handles market data, risk enforcement, and trade execution. Includes a full memory layer with local persistence, episodic logging, deterministic compute tools, and OpenClaw-native memory integration.
 
 ## Architecture
 
 ```
 OpenClaw Agent (brain: reasoning, decisions, strategy evolution)
        │
-       │ calls 52 typed tools
+       │ calls 66 typed tools
        ▼
-Plugin (this package) ── HTTP ──→ Orchestrator (data + risk + execution)
-                                       │              │
-                                   Bitquery        SpyFly Bot
-                                   (market data)   (on-chain execution)
+Plugin (this package)
+  ├── HTTP ──→ Orchestrator (data + risk + execution)
+  │                  │              │
+  │              Bitquery        SpyFly Bot
+  │              (market data)   (on-chain execution)
+  │
+  ├── Local persistence (state, decisions, bulletin, patterns)
+  │     └── .traderclaw-v1-data/
+  │
+  └── OpenClaw native memory (auto-loaded every session)
+        ├── MEMORY.md (durable facts — always in context)
+        └── memory/YYYY-MM-DD.md (daily logs — today + yesterday)
 ```
 
-The plugin gives OpenClaw tools to interact with the Solana trading orchestrator. The orchestrator gathers market data, enforces risk rules, and proxies trades. OpenClaw does all reasoning, decision-making, and strategy evolution.
+The plugin gives OpenClaw tools to interact with the Solana trading orchestrator. The orchestrator gathers market data, enforces risk rules, and proxies trades. OpenClaw does all reasoning, decision-making, and strategy evolution. The plugin also manages a 3-layer memory system that eliminates amnesia between sessions.
 
 ## Prerequisites
 
@@ -159,7 +167,8 @@ If you prefer to configure manually instead of using the CLI, add to `~/.opencla
           orchestratorUrl: "https://api.traderclaw.ai",
           walletId: 1,
           apiKey: "sk_live_your_key_here",
-          apiTimeout: 120000  // optional, default 120s
+          apiTimeout: 120000,  // optional, default 120s
+          dataDir: "/path/to/data"  // optional, default: <cwd>/.traderclaw-v1-data
         }
       }
     }
@@ -173,7 +182,62 @@ Restart the gateway after configuration:
 openclaw gateway restart
 ```
 
-## Available Tools (52)
+## Memory & Context System
+
+The plugin implements a 3-layer memory architecture that uses OpenClaw's native infrastructure plus custom tools to eliminate amnesia between sessions.
+
+### Layer 1: Durable Facts (`MEMORY.md`)
+
+OpenClaw automatically loads `MEMORY.md` into agent context at every session start — zero tool calls needed. When `solana_state_save` is called, it writes both a JSON state file AND updates `MEMORY.md` with curated durable facts: tier, wallet, mode, strategy version, watchlist, permanent learnings, and regime canary.
+
+### Layer 2: Episodic Memory (Daily Logs + Bootstrap Injection)
+
+Two auto-loaded sources:
+- **Daily logs** (`memory/YYYY-MM-DD.md`) — OpenClaw auto-loads today + yesterday's files. Written via `solana_daily_log`.
+- **Bootstrap injection** — The `agent:bootstrap` hook auto-injects durable state, last 50 decisions, team bulletin (last 6h), context snapshot, and entitlements into agent context at session start.
+
+### Layer 3: Deep Knowledge (Server-Side Memory)
+
+Unlimited retention via the orchestrator API. `solana_memory_write` / `solana_memory_search` / `solana_memory_by_token` for storing and retrieving historical trades, lessons, and patterns.
+
+### Memory Flush Hook
+
+The `memory:flush` hook fires automatically when OpenClaw is about to trim context. It syncs `MEMORY.md` from the last persisted state and writes a compaction marker to the daily log. This is an automatic safety net — no agent action needed.
+
+### Bootstrap Hook (`agent:bootstrap`)
+
+Fires at every agent session start before the first prompt. Injects via `context.bootstrapFiles`:
+
+| File Injected | Source | Content |
+|---|---|---|
+| `<agentId>-durable-state.json` | `state/<agentId>.json` | Full durable state from last session |
+| `<agentId>-decision-log.jsonl` | `logs/<agentId>/decisions.jsonl` | Last 50 decision log entries |
+| `team-bulletin.jsonl` | `logs/shared/team-bulletin.jsonl` | Bulletin entries from last 6 hours |
+| `context-snapshot.json` | `state/context-snapshot.json` | Latest portfolio world-view snapshot |
+| `active-entitlements.json` | 4-step fallback chain | Entitlement tier, limits, expiration |
+
+Entitlement fallback chain: live API fetch → cached file → durable state → conservative defaults (starter tier).
+
+### Local Data Directory
+
+```
+.traderclaw-v1-data/
+├── state/                  # Durable agent state, snapshot, entitlement cache, patterns
+├── logs/
+│   ├── <agentId>/          # Per-agent decision logs (JSONL)
+│   └── shared/             # Team bulletin (JSONL)
+```
+
+Plus OpenClaw-native paths at project root:
+```
+MEMORY.md                   # Curated durable facts (auto-loaded by OpenClaw)
+memory/
+├── 2026-03-19.md           # Today's daily log (auto-loaded by OpenClaw)
+├── 2026-03-18.md           # Yesterday's daily log (auto-loaded by OpenClaw)
+└── ...                     # Auto-pruned after 7 days
+```
+
+## Available Tools (66)
 
 ### Scanning
 | Tool | Description |
@@ -202,13 +266,13 @@ openclaw gateway restart
 | `solana_trade_precheck` | Pre-trade risk validation |
 | `solana_trade_execute` | Execute trade via SpyFly bot |
 
-### Reflection
+### Reflection & Server-Side Memory
 | Tool | Description |
 |------|-------------|
 | `solana_trade_review` | Post-trade outcome review |
-| `solana_memory_write` | Write journal entry |
-| `solana_memory_search` | Search trading memories |
-| `solana_memory_by_token` | Token-specific trade history |
+| `solana_memory_write` | Write journal entry to server |
+| `solana_memory_search` | Search trading memories on server |
+| `solana_memory_by_token` | Token-specific trade history from server |
 | `solana_journal_summary` | Performance stats summary |
 
 ### Strategy
@@ -229,17 +293,104 @@ openclaw gateway restart
 | `solana_capital_status` | Balance, positions, PnL, limits |
 | `solana_positions` | Current positions with PnL |
 | `solana_funding_instructions` | Deposit instructions |
+| `solana_wallets` | List all wallets |
+| `solana_wallet_create` | Create a new wallet |
 
 ### Entitlements
 | Tool | Description |
 |------|-------------|
 | `solana_entitlement_plans` | Available limit upgrades |
 | `solana_entitlement_purchase` | Purchase upgrade plan |
+| `solana_entitlement_current` | Current tier, limits, and expiration (also caches for bootstrap) |
+| `solana_entitlement_upgrade` | Upgrade entitlement tier |
+| `solana_entitlement_costs` | View upgrade cost breakdown |
 
-### System
+### Trade History & Risk
+| Tool | Description |
+|------|-------------|
+| `solana_trades` | Query trade history with filters |
+| `solana_risk_denials` | View recent risk denial log |
+
+### Alpha Signal Processing
+| Tool | Description |
+|------|-------------|
+| `solana_alpha_subscribe` | Subscribe to alpha signal WebSocket feed |
+| `solana_alpha_unsubscribe` | Unsubscribe from alpha feed |
+| `solana_alpha_signals` | Retrieve buffered alpha signals |
+| `solana_alpha_history` | Query historical alpha signals |
+| `solana_alpha_sources` | Get source reputation statistics |
+
+### Bitquery Deep Scans
+| Tool | Description |
+|------|-------------|
+| `solana_bitquery_query` | Execute custom Bitquery GraphQL query |
+| `solana_bitquery_catalog` | List available Bitquery datasets |
+| `solana_bitquery_templates` | Pre-built query templates |
+| `solana_bitquery_subscribe` | Create Bitquery streaming subscription |
+| `solana_bitquery_unsubscribe` | Remove streaming subscription |
+| `solana_bitquery_subscriptions` | List active subscriptions |
+| `solana_bitquery_subscription_reopen` | Reopen a closed subscription |
+
+### Gateway & System
 | Tool | Description |
 |------|-------------|
 | `solana_system_status` | Orchestrator health check |
+| `solana_gateway_credentials_get` | Get gateway API credentials |
+| `solana_gateway_credentials_set` | Set gateway API credentials |
+| `solana_gateway_credentials_delete` | Delete gateway credentials |
+| `solana_gateway_forward_probe` | Probe gateway forwarding connectivity |
+| `solana_agent_sessions` | View agent session diagnostics |
+| `solana_startup_gate` | Run startup gate sequence |
+| `solana_runtime_status` | Get runtime status diagnostics |
+
+### Local Durable State
+| Tool | Description |
+|------|-------------|
+| `solana_state_save` | Save agent state to local JSON (also writes MEMORY.md) |
+| `solana_state_read` | Read agent state from local JSON |
+
+### Episodic Decision Log
+| Tool | Description |
+|------|-------------|
+| `solana_decision_log` | Log structured decision entry (FIFO capped at 50) |
+
+### Team Bulletin
+| Tool | Description |
+|------|-------------|
+| `solana_team_bulletin_post` | Post discovery, alert, or status to shared bulletin |
+| `solana_team_bulletin_read` | Read bulletin entries with time/type filters |
+
+### Context Snapshot
+| Tool | Description |
+|------|-------------|
+| `solana_context_snapshot_write` | Write portfolio world-view snapshot |
+| `solana_context_snapshot_read` | Read latest portfolio snapshot |
+
+### Deterministic Compute (Anti-Hallucination)
+| Tool | Description |
+|------|-------------|
+| `solana_compute_confidence` | Weighted confidence score (on-chain, signal, social, smart money, risk penalty) |
+| `solana_compute_freshness_decay` | Freshness decay factor by signal age |
+| `solana_compute_position_limits` | Full position sizing ladder with reduction breakdown |
+| `solana_classify_deployer_risk` | Deployer wallet risk classification (LOW/MODERATE/HIGH/CRITICAL) |
+
+### Deep Analysis
+| Tool | Description |
+|------|-------------|
+| `solana_history_export` | Export decision logs + optionally server-side data (trades, memory, strategy) |
+| `solana_pattern_store` | Read/write/list named trading patterns |
+
+### OpenClaw Native Memory
+| Tool | Description |
+|------|-------------|
+| `solana_daily_log` | Append to today's daily log (auto-loaded by OpenClaw next session, 7-day prune) |
+
+## Hooks (2)
+
+| Hook | Trigger | What It Does |
+|------|---------|--------------|
+| `agent:bootstrap` | Every session start | Injects durable state, decisions, bulletin, snapshot, and entitlements into context |
+| `memory:flush` | Before OpenClaw context compaction | Syncs MEMORY.md from persisted state, writes compaction marker to daily log |
 
 ## Skills
 
@@ -256,7 +407,7 @@ The primary skill that teaches OpenClaw the complete trading lifecycle:
 8. **REVIEW** — Journal outcomes honestly
 9. **EVOLVE** — Update strategy weights based on performance
 
-Includes: token lifecycle framework, anti-rug heuristics, volume pattern reading, FOMO detection, liquidity-relative sizing, house money exits, dead money rule, narrative awareness.
+Includes: token lifecycle framework, anti-rug heuristics, volume pattern reading, FOMO detection, liquidity-relative sizing, house money exits, dead money rule, narrative awareness, 3-layer memory architecture, deterministic compute tools.
 
 ### social-intel (Alpha Feed & Social Intelligence)
 Standalone skill for SpyFly alpha feed integration and social intelligence:
@@ -325,3 +476,9 @@ I'll monitor this position and review after exit.
 - Run `traderclaw status` to check system health
 - Check if kill switch is enabled
 - Verify your wallet has sufficient SOL balance
+
+**Memory/state not persisting:**
+- Check that the `dataDir` config points to a writable location
+- Default is `<cwd>/.traderclaw-v1-data` — verify permissions
+- Check `MEMORY.md` exists at project root after first `solana_state_save` call
+- Check `memory/` directory for daily log files
