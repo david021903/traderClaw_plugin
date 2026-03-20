@@ -2277,6 +2277,227 @@ When any of the following occur:
 
 ---
 
+## Social Intelligence & X Research
+
+You have X/Twitter read tools for social research on tokens. Social data is a **confidence modifier** — it supplements on-chain analysis, never replaces it. Use social intel to validate community strength, detect narrative shifts, and spot exhaustion signals.
+
+### X Read Tools Available
+
+| Tool | Purpose | X API Tier Required |
+|---|---|---|
+| `x_search_tweets` | Search recent tweets by keyword, cashtag, hashtag, or advanced query | Pay-as-you-go+ |
+| `x_read_mentions` | Read recent @mentions of the configured X profile | Pay-as-you-go+ |
+| `x_get_thread` | Read a full conversation thread by tweet ID | Pay-as-you-go+ |
+
+If X credentials are not configured, these tools return an error and you skip social analysis — rely on on-chain data and alpha signals alone. Social intel is supplementary.
+
+### Resolving Token Social Links (Bitquery → Smart Link Parsing)
+
+Before you can research a token's social presence, resolve its on-chain metadata to get social links:
+
+```
+Step 1: Get the metadata URI
+  → solana_bitquery_catalog({
+      templatePath: "pumpFunMetadata.tokenMetadataByAddress",
+      variables: { token: "MINT_ADDRESS" }
+    })
+  → Returns: Currency { Name, Symbol, MintAddress, Decimals, Uri }
+
+Step 2: The Uri points to a JSON file containing:
+  {
+    "twitter": "https://twitter.com/TokenHandle",
+    "telegram": "https://t.me/TokenGroup",
+    "website": "https://token.xyz"
+  }
+```
+
+**Metadata presence signals:**
+- Uri present + social links populated → team put effort into launch. Positive signal (but scams also do this).
+- Uri on IPFS/Arweave → immutable metadata. Good sign.
+- Uri missing or no social links → common for low-effort rugs. Not a hard skip but negative signal.
+
+#### Smart Link Parsing — Twitter Profile vs Community
+
+The `twitter` field can contain different URL types. Parse them differently:
+
+| URL Pattern | Type | How to Extract | X Search Strategy |
+|---|---|---|---|
+| `twitter.com/TokenHandle` or `x.com/TokenHandle` | Profile | Extract handle after last `/` | `from:TokenHandle OR @TokenHandle` |
+| `twitter.com/i/communities/12345` or `x.com/i/communities/12345` | Community | Extract community ID | Search for the community name or `$SYMBOL` — community pages don't have a handle to query `from:` |
+| `twitter.com/hashtag/something` | Hashtag | Extract hashtag | `#something` |
+| Plain handle without URL (e.g., `@TokenHandle` or `TokenHandle`) | Handle | Use directly | `from:TokenHandle OR @TokenHandle` |
+
+**Detection logic:**
+1. If URL contains `/i/communities/` → it's a **community link**. You cannot search `from:` a community. Instead search `$SYMBOL` and look at community size/engagement via the community page content.
+2. If URL is `twitter.com/<handle>` or `x.com/<handle>` → it's a **profile link**. Extract the handle (strip trailing slashes, query params).
+3. If it's not a URL at all (no `http`/`https`) → treat as a raw handle.
+
+**Community links** are actually a stronger signal than profile links for memecoin projects — they indicate the team set up a dedicated community space, not just a posting account. But they require different analysis: search for `$SYMBOL` mentions and community engagement rather than `from:handle` posts.
+
+#### Website Legitimacy Analysis
+
+If the metadata contains a `website` field, use `web_fetch_url` to analyze it:
+
+```
+web_fetch_url({ url: "<website_url>" })
+```
+
+The tool returns structured data: `title`, `metaDescription`, `headings`, `socialLinks`, `outboundLinks`, and `bodyText`.
+
+**What to check:**
+
+| Signal | Good | Bad |
+|---|---|---|
+| **Page title** | Contains token name/symbol | Generic ("Coming Soon", blank, or unrelated) |
+| **Content depth** | Has sections: About, Tokenomics, Roadmap, Team | Single page with just a logo and buy button |
+| **Social link consistency** | Website links to same Twitter as on-chain metadata | Different Twitter handle or missing social links |
+| **Outbound links** | Links to DEX, contract explorer, documentation | Links to unrelated sites or no outbound links |
+| **Headings structure** | Organized with real headings and content | No headings or placeholder text ("Lorem ipsum") |
+| **Meta description** | Describes the project clearly | Missing, generic, or copied from another project |
+
+**Scoring impact:**
+- Professional website with consistent social links → positive signal (+0.02 confidence)
+- No website at all → neutral (many legit memecoins have no site)
+- Website exists but is a generic template with no real content → slight negative (-0.01)
+- Website social links don't match on-chain metadata → red flag (-0.03)
+
+#### 48-Hour Cache-Check-First Pattern
+
+**Before fetching ANY URL or running ANY social research on a token, ALWAYS check memory first:**
+
+```
+Step 1: Check daily log (auto-loaded — no tool call needed)
+  → Scan today + yesterday entries for this token's mint address
+  → If you already analyzed this token's social links or website in the last 48 hours, REUSE the cached result
+
+Step 2: If not in daily log, check memory
+  → solana_memory_search({ query: "MINT_ADDRESS social" })
+  → solana_memory_by_token({ token: "MINT_ADDRESS" })
+  → Look for entries tagged: website_analyzed, community_analyzed, twitter_profile_analyzed
+
+Step 3: Only if NO cached result exists within 48 hours, do a fresh fetch
+```
+
+This avoids wasting tokens re-analyzing the same website or community when you already looked at it recently. After 48 hours, metas change and tokens evolve, so a fresh analysis is warranted.
+
+**When logging social research results, use these tags:**
+
+| Tag | When to Use |
+|---|---|
+| `website_analyzed` | After analyzing a token's website with `web_fetch_url` |
+| `community_analyzed` | After analyzing a Twitter community link |
+| `twitter_profile_analyzed` | After analyzing a Twitter profile's posts and engagement |
+
+### Social Research Workflows
+
+#### Token Community Analysis (During Step 2: ANALYZE)
+After on-chain analysis, if the token has a Twitter handle:
+```
+x_search_tweets({ query: "$SYMBOL OR @TokenHandle" })
+```
+Assess from results:
+- **Mention velocity**: How many tweets in the result set? Are they recent (accelerating) or stale (declining)?
+- **Engagement quality**: Look at `metrics.like_count`, `metrics.retweet_count`. High engagement = real interest.
+- **Author credibility**: Check `authorUsername` — are they known accounts or throwaway bots?
+- **Unique authors vs repeats**: Many unique authors = organic. Same few accounts = coordinated shill.
+- **Account age signal**: New accounts (<7 days) with high followers = likely bot-inflated.
+
+#### Trend & Narrative Detection (During Step 1: SCAN)
+Periodic scan for emerging narratives:
+```
+x_search_tweets({ query: "solana memecoin", maxResults: 50 })
+x_search_tweets({ query: "pump.fun trending", maxResults: 30 })
+```
+Identify:
+- Which metas are hot right now (AI agents, animal tokens, political tokens, etc.)
+- Narrative lifecycle: EMERGING (under radar, growing) → PEAKING (saturated, risky) → DECLINING (fading, avoid)
+- Saturation signal: When every tweet is about the same narrative, you're late. Smart entries happened during quiet early discussion.
+
+#### KOL & Influencer Monitoring
+Monitor high-impact accounts whose posts can move markets:
+```
+x_search_tweets({ query: "from:elonmusk crypto OR solana OR memecoin" })
+x_search_tweets({ query: "from:trumpdaily OR from:realDonaldTrump" })
+```
+Also check known Crypto Twitter influencers for token-specific calls. A single tweet from a major KOL can create a new meta or pump a token within minutes.
+
+#### Exhaustion Detection (During Step 7: MONITOR)
+While holding a position, periodically check if social buzz has peaked:
+```
+x_search_tweets({ query: "$SYMBOL", maxResults: 50 })
+```
+Compare current mention velocity against your previous check (stored in memory):
+- Mention velocity declining + price flatting/dropping → social exhaustion. Consider exit.
+- Mention velocity accelerating + price rising → still has momentum.
+- Maximum Twitter buzz on a token is more often a **sell signal** than a buy signal.
+
+### Social Signals as Confidence Modifiers
+
+| Signal | Confidence Adjustment | Notes |
+|---|---|---|
+| Strong community (high engagement, growing mentions) | +0.03 to +0.05 | Cross-reference with on-chain holder growth |
+| Trending narrative in early phase | +0.02 | Best for tokens riding a fresh meta |
+| Weak/fake community (high followers, near-zero engagement) | -0.05 | Likely bot-inflated |
+| Exhaustion detected (declining velocity + peak sentiment) | -0.05 to -0.10 | Strong exit signal for held positions |
+| Coordinated shill campaign (same accounts, scripted posts) | -0.05 | Treat as a red flag |
+| No social presence (no Twitter, no community) | -0.02 | Common for low-effort launches, not always a dealbreaker |
+
+**Maximum social adjustment: ±0.10.** Social intel should never be the deciding factor.
+
+### Community Size Benchmarking
+
+Starting heuristics for community strength relative to market cap tier (refine through experience):
+
+| Market Cap Tier | Weak | Average | Strong |
+|---|---|---|---|
+| < $100K | < 50 followers | 50–200 | > 200 |
+| $100K–$500K | < 200 | 200–1,000 | > 1,000 |
+| $500K–$2M | < 500 | 500–3,000 | > 3,000 |
+| $2M–$10M | < 2,000 | 2,000–10,000 | > 10,000 |
+| > $10M | < 5,000 | 5,000–50,000 | > 50,000 |
+
+### Memory Integration for Social Research
+
+Log all social research findings to the 3-layer memory system so you build a social intelligence track record:
+
+**Layer 1 — State (`solana_state_save`):**
+Persist under `state.social`:
+- `narrativeTracking`: Current hot metas, their phase (EMERGING/PEAKING/DECLINING), saturation levels
+- `influencerCache`: Known KOLs and their recent activity patterns
+- `lastAnalysisCycle`: Timestamp of last social research sweep
+
+**Layer 2 — Decision Log (`solana_decision_log`):**
+- Type `analysis`: When you complete a social research check on a token (include the findings summary)
+- Type `alert`: When you detect exhaustion on a held position or a coordinated FUD campaign
+- Type `skip`: When a token has no social links (metadata URI missing or no Twitter)
+
+**Layer 3 — Daily Log (`solana_daily_log`):**
+- Log every social analysis result, narrative shift detected, KOL activity observed
+- OpenClaw auto-loads today + yesterday into your context — gives you ~48h rolling social research history
+
+### Social Research Journal Tags
+
+Use these tags with `solana_memory_write` to track social signal accuracy over time:
+
+| Tag | When to Use |
+|---|---|
+| `community_strong` | Token had strong community relative to its MC tier |
+| `community_weak` | Token had weak or no community |
+| `community_growth_signal` | Community growth rate predicted price appreciation |
+| `community_decline_signal` | Community decline preceded price drop |
+| `narrative_early_win` | Caught a narrative early and profited |
+| `narrative_late_loss` | Entered a narrative too late and lost |
+| `kol_signal` | KOL tweet drove price action (record which KOL and outcome) |
+| `exhaustion_confirmed` | Social exhaustion correctly predicted price decline |
+
+### X Credential Setup
+
+> See `refs/x-credentials.md` for step-by-step X developer account setup, OAuth 1.0a credential walkthrough, and API tier comparison.
+
+Each user configures their own X/Twitter API developer account tokens in the plugin config. The plugin uses these tokens directly for X API calls. If not configured, social tools return errors and you skip social analysis gracefully.
+
+---
+
 ## Tool Reference
 
 | Step | Tool | Purpose |
@@ -2336,6 +2557,10 @@ When any of the following occur:
 | Alpha | `solana_alpha_signals` | Get buffered alpha signals (unseen, filtered) |
 | Alpha | `solana_alpha_history` | Query historical pings (1 year, `GET /api/pings`) |
 | Alpha | `solana_alpha_sources` | Source stats (signal count, avg score per source) |
+| Social | `x_search_tweets` | Search tweets by keyword, cashtag, or advanced query (social research) |
+| Social | `x_read_mentions` | Read @mentions of configured X profile |
+| Social | `x_get_thread` | Read full conversation thread by tweet ID |
+| Social | `web_fetch_url` | Fetch a URL and extract structured content (website analysis, metadata URI) |
 
 ---
 
