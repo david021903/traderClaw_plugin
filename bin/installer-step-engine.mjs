@@ -8,6 +8,35 @@ import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 
+/**
+ * OpenClaw defaults Telegram to groupPolicy "allowlist" with empty groupAllowFrom, so Doctor warns on
+ * every gateway restart and group messages are dropped. Wizard onboarding targets DMs first; set
+ * explicit "open" unless the user already configured sender allowlists.
+ */
+function ensureTelegramGroupPolicyOpenForWizard(configPath = CONFIG_FILE) {
+  if (!existsSync(configPath)) return { changed: false };
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    return { changed: false };
+  }
+  if (!config.channels || typeof config.channels !== "object") return { changed: false };
+  const tg = config.channels.telegram;
+  if (!tg || typeof tg !== "object") return { changed: false };
+
+  const hasSenderAllowlist =
+    (Array.isArray(tg.groupAllowFrom) && tg.groupAllowFrom.length > 0) ||
+    (Array.isArray(tg.allowFrom) && tg.allowFrom.length > 0);
+  if (hasSenderAllowlist) return { changed: false };
+  if (tg.groupPolicy === "open") return { changed: false };
+
+  tg.groupPolicy = "open";
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  return { changed: true };
+}
+
 function commandExists(cmd) {
   try {
     execSync(`command -v ${cmd}`, { stdio: "ignore", shell: true });
@@ -867,6 +896,14 @@ export class InstallerStepEngine {
     await runCommandWithEvents("openclaw", ["plugins", "enable", "telegram"]);
     await runCommandWithEvents("openclaw", ["channels", "add", "--channel", "telegram", "--token", this.options.telegramToken]);
     await runCommandWithEvents("openclaw", ["channels", "status", "--probe"]);
+    const policy = ensureTelegramGroupPolicyOpenForWizard();
+    if (policy.changed) {
+      this.emitLog(
+        "telegram_required",
+        "info",
+        "Set channels.telegram.groupPolicy=open (no sender allowlist yet) to avoid Doctor allowlist warnings on gateway restart. Tighten groupAllowFrom later if you use groups.",
+      );
+    }
     return { configured: true };
   }
 
