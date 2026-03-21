@@ -229,9 +229,11 @@ curl -H "Authorization: Bearer <gatewayToken>" <gatewayBaseUrl>/health
 
 If the log shows `at Object.writeConfigFile (.../auth-profiles-...js)` during `openclaw plugins install`, that is OpenClaw **validating** `~/.openclaw/openclaw.json` before write — not a generic disk error.
 
-**Common cause:** writing `plugins.entries.<pluginId>` (e.g. orchestrator URL) **before** `openclaw plugins install` has materialized the plugin under `~/.openclaw/extensions/`, so the merged config fails plugin registry / schema checks.
+**Required `orchestratorUrl`:** The plugin manifest marks `orchestratorUrl` as required. `openclaw plugins install` calls `writeConfigFile` **during** that command, so `plugins.entries.<id>.config.orchestratorUrl` must be present **before** install completes. The wizard seeds the current plugin id (`solana-traderclaw-v1`) and merges orchestrator URL for **legacy** entry keys still on disk from older releases (`solana-trader`, `traderclaw-v1`, e.g. v1.0.3 under `~/.openclaw/extensions/solana-trader/`).
 
-The bundled `traderclaw install --wizard` flow seeds TraderClaw plugin settings **after** a successful `openclaw plugins install` and **before** `openclaw plugins enable`.
+**`agents.defaults.heartbeat`:** OpenClaw’s schema requires `agents.defaults.heartbeat` (can be `{}`) whenever `agents.defaults` exists. The wizard sets this in the LLM step.
 
-**Also check:** OpenClaw’s config schema requires `agents.defaults.heartbeat` (can be `{}`) whenever `agents.defaults` is present. The wizard sets this when configuring the LLM so `openclaw plugins install` does not fail validation after `configure_llm`.
+**`plugins.allow`:** If empty, OpenClaw warns that discovered plugins may auto-load. The installer sets `plugins.allow` to include the current and any legacy TraderClaw ids that have config entries.
+
+**Wizard logs:** ANSI color codes from the `openclaw` CLI are stripped before logs are shown in the browser UI.
 

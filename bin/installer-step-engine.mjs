@@ -8,6 +8,14 @@ import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 
+/** Older npm / plugin ids (pre–solana-traderclaw-v1 rename) — still present in ~/.openclaw/extensions on upgrades. */
+const LEGACY_TRADER_PLUGIN_IDS = ["solana-trader", "traderclaw-v1"];
+
+function stripAnsi(text) {
+  if (typeof text !== "string") return text;
+  return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 /**
  * OpenClaw defaults Telegram to groupPolicy "allowlist" with empty groupAllowFrom, so Doctor warns on
  * every gateway restart and group messages are dropped. Wizard onboarding targets DMs first; set
@@ -249,12 +257,13 @@ function backupExistingPluginDir(pluginId, onEvent) {
 }
 
 async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorUrl) {
-  // Do not seed plugins.entries before `openclaw plugins install`. OpenClaw validates the full
-  // config on write (auth-profiles writeConfigFile → validateConfigObjectRawWithPlugins). A
-  // stub entry before the package exists under ~/.openclaw/extensions can fail registry/schema
-  // validation and surface as: at Object.writeConfigFile (... auth-profiles ...).
+  // `openclaw plugins install` calls writeConfigFile *during* the command. Plugin config schema
+  // requires orchestratorUrl — so we must seed it *before* install, not only after.
+  // Also merge legacy plugins.entries.solana-trader (v1.0.3-era id) so old extensions don't fail validation.
   mkdirSync(CONFIG_DIR, { recursive: true });
   mkdirSync(join(CONFIG_DIR, "extensions"), { recursive: true });
+
+  seedPluginConfig(modeConfig, orchestratorUrl || "https://api.traderclaw.ai");
 
   let recoveredExistingDir = null;
   try {
@@ -293,6 +302,8 @@ async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorU
 }
 
 function seedPluginConfig(modeConfig, orchestratorUrl, configPath = CONFIG_FILE) {
+  const defaultUrl = orchestratorUrl || "https://api.traderclaw.ai";
+
   let config = {};
   try {
     config = JSON.parse(readFileSync(configPath, "utf-8"));
@@ -303,20 +314,38 @@ function seedPluginConfig(modeConfig, orchestratorUrl, configPath = CONFIG_FILE)
   if (!config.plugins || typeof config.plugins !== "object") config.plugins = {};
   if (!config.plugins.entries || typeof config.plugins.entries !== "object") config.plugins.entries = {};
 
-  const existing = config.plugins.entries[modeConfig.pluginId];
-  const existingConfig = existing && typeof existing === "object" && existing.config && typeof existing.config === "object"
-    ? existing.config
-    : {};
+  const entries = config.plugins.entries;
 
-  config.plugins.entries[modeConfig.pluginId] = {
-    enabled: existing && typeof existing.enabled === "boolean" ? existing.enabled : true,
-    config: {
-      ...existingConfig,
-      orchestratorUrl: typeof existingConfig.orchestratorUrl === "string" && existingConfig.orchestratorUrl.trim()
-        ? existingConfig.orchestratorUrl.trim()
-        : (orchestratorUrl || "https://api.traderclaw.ai"),
-    },
+  const mergeOrchestratorForId = (pluginId) => {
+    const existing = entries[pluginId];
+    const existingConfig = existing && typeof existing === "object" && existing.config && typeof existing.config === "object"
+      ? existing.config
+      : {};
+    const url = typeof existingConfig.orchestratorUrl === "string" && existingConfig.orchestratorUrl.trim()
+      ? existingConfig.orchestratorUrl.trim()
+      : defaultUrl;
+    entries[pluginId] = {
+      enabled: existing && typeof existing.enabled === "boolean" ? existing.enabled : true,
+      config: {
+        ...existingConfig,
+        orchestratorUrl: url,
+      },
+    };
   };
+
+  mergeOrchestratorForId(modeConfig.pluginId);
+  for (const legacyId of LEGACY_TRADER_PLUGIN_IDS) {
+    if (entries[legacyId]) mergeOrchestratorForId(legacyId);
+  }
+
+  const allowSet = new Set(
+    Array.isArray(config.plugins.allow) ? config.plugins.allow.filter((id) => typeof id === "string" && id.trim()) : [],
+  );
+  allowSet.add(modeConfig.pluginId);
+  for (const legacyId of LEGACY_TRADER_PLUGIN_IDS) {
+    if (entries[legacyId]) allowSet.add(legacyId);
+  }
+  config.plugins.allow = [...allowSet];
 
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
@@ -732,7 +761,8 @@ export class InstallerStepEngine {
   }
 
   emitLog(stepId, level, text, urls = []) {
-    this.hooks.onLog({ at: nowIso(), stepId, level, text, urls });
+    const clean = typeof text === "string" ? stripAnsi(text) : text;
+    this.hooks.onLog({ at: nowIso(), stepId, level, text: clean, urls });
   }
 
   async runStep(stepId, title, handler) {
@@ -744,7 +774,7 @@ export class InstallerStepEngine {
       this.emitStep(stepId, "completed", title);
       return result;
     } catch (err) {
-      const detail = err?.message || String(err);
+      const detail = stripAnsi(err?.message || String(err));
       this.state.stepResults.push({ stepId, title, status: "failed", startedAt, completedAt: nowIso(), error: detail });
       this.state.errors.push({ stepId, error: detail });
       this.emitStep(stepId, "failed", detail);
