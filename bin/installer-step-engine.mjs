@@ -3,6 +3,7 @@ import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
 
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
@@ -474,49 +475,12 @@ function listProviderModels(provider) {
 }
 
 function fallbackModelForProvider(provider) {
-  if (provider === "anthropic") return "anthropic/claude-opus-4-6";
+  // When `openclaw models list` fails, use current API ids (verify vs provider docs periodically).
+  if (provider === "anthropic") return "anthropic/claude-sonnet-4-6";
   if (provider === "openai") return "openai/gpt-5.4";
   if (provider === "openai-codex") return "openai-codex/gpt-5.4";
+  if (provider === "google" || provider === "google-vertex") return "google/gemini-2.5-flash";
   return `${provider}/default`;
-}
-
-function modelDateScore(modelId) {
-  const match = String(modelId || "").match(/-(\d{8})$/);
-  if (!match) return 0;
-  const parsed = Number.parseInt(match[1], 10);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function choosePreferredProviderModel(provider, models = []) {
-  const items = Array.isArray(models) ? models.filter(Boolean) : [];
-  if (items.length === 0) return "";
-
-  const knownBad = new Set([
-    // Frequently present in catalogs but can 404 for message requests.
-    "anthropic/claude-3-5-haiku-20241022",
-  ]);
-
-  const ranked = items
-    .map((modelId) => {
-      let score = 0;
-      const id = String(modelId);
-      const lower = id.toLowerCase();
-
-      if (knownBad.has(id)) score -= 1000000;
-      if (lower.includes("latest")) score += 100000;
-
-      if (provider === "anthropic") {
-        if (lower.includes("claude-sonnet")) score += 50000;
-        else if (lower.includes("claude-opus")) score += 40000;
-        else if (lower.includes("claude-haiku")) score += 20000;
-      }
-
-      score += modelDateScore(id);
-      return { id, score };
-    })
-    .sort((a, b) => (b.score - a.score) || a.id.localeCompare(b.id));
-
-  return ranked[0]?.id || items[0];
 }
 
 function providerEnvKey(provider) {
@@ -545,10 +509,8 @@ function resolveLlmModelSelection(provider, requestedModel) {
 
   if (availableModels.length > 0) {
     const chosen = choosePreferredProviderModel(provider, availableModels);
-    if (chosen && chosen !== availableModels[0]) {
-      warnings.push(
-        `Auto-selected '${chosen}' from provider catalog (more stable default than '${availableModels[0]}').`,
-      );
+    if (chosen && availableModels.length > 1) {
+      warnings.push(`Auto-selected '${chosen}' as default model (${availableModels.length} models in catalog).`);
     }
     return { model: chosen || availableModels[0], source: "provider_default", availableModels, warnings };
   }
