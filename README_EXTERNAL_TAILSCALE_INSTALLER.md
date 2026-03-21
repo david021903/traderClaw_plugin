@@ -233,3 +233,5 @@ If the log shows `at Object.writeConfigFile (.../auth-profiles-...js)` during `o
 
 The bundled `traderclaw install --wizard` flow seeds TraderClaw plugin settings **after** a successful `openclaw plugins install` and **before** `openclaw plugins enable`.
 
+**Also check:** OpenClaw’s config schema requires `agents.defaults.heartbeat` (can be `{}`) whenever `agents.defaults` is present. The wizard sets this when configuring the LLM so `openclaw plugins install` does not fail validation after `configure_llm`.
+

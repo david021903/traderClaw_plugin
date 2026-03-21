@@ -176,7 +176,9 @@ function runCommandWithEvents(cmd, args = [], opts = {}) {
       const urls = [...new Set([...extractUrls(stdout), ...extractUrls(stderr)])];
       if (code === 0) resolve({ stdout, stderr, code, urls });
       else {
-        const stderrPreview = (stderr || "").trim().split("\n").slice(-6).join("\n");
+        const raw = (stderr || "").trim();
+        const tailLines = raw.split("\n").filter((l) => l.length > 0).slice(-40).join("\n");
+        const stderrPreview = tailLines.length > 8000 ? tailLines.slice(-8000) : tailLines;
         const err = new Error(stderrPreview ? `command failed with exit code ${code}: ${stderrPreview}` : `command failed with exit code ${code}`);
         err.code = code;
         err.stdout = stdout;
@@ -599,6 +601,12 @@ function configureOpenClawLlmProvider({ provider, model, credential }, configPat
 
   if (!config.agents) config.agents = {};
   if (!config.agents.defaults) config.agents.defaults = {};
+  // OpenClaw 2026+ Zod schema requires agents.defaults.heartbeat whenever defaults exists
+  // (see OpenClaw AgentDefaultsSchema). Omitting it makes openclaw plugins install fail at
+  // writeConfigFile → validateConfigObjectRaw with a stack-only error in the UI.
+  if (!config.agents.defaults.heartbeat || typeof config.agents.defaults.heartbeat !== "object") {
+    config.agents.defaults.heartbeat = {};
+  }
   if (!config.agents.defaults.model || typeof config.agents.defaults.model !== "object") {
     config.agents.defaults.model = {};
   }
