@@ -223,3 +223,13 @@ traderclaw status
 curl -H "Authorization: Bearer <gatewayToken>" <gatewayBaseUrl>/health
 ```
 
+---
+
+## 11) `activate_openclaw_plugin` / `writeConfigFile` (OpenClaw)
+
+If the log shows `at Object.writeConfigFile (.../auth-profiles-...js)` during `openclaw plugins install`, that is OpenClaw **validating** `~/.openclaw/openclaw.json` before write — not a generic disk error.
+
+**Common cause:** writing `plugins.entries.<pluginId>` (e.g. orchestrator URL) **before** `openclaw plugins install` has materialized the plugin under `~/.openclaw/extensions/`, so the merged config fails plugin registry / schema checks.
+
+The bundled `traderclaw install --wizard` flow seeds TraderClaw plugin settings **after** a successful `openclaw plugins install` and **before** `openclaw plugins enable`.
+

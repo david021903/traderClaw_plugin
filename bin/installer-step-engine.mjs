@@ -247,7 +247,13 @@ function backupExistingPluginDir(pluginId, onEvent) {
 }
 
 async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorUrl) {
-  seedPluginConfig(modeConfig, orchestratorUrl || "https://api.traderclaw.ai");
+  // Do not seed plugins.entries before `openclaw plugins install`. OpenClaw validates the full
+  // config on write (auth-profiles writeConfigFile → validateConfigObjectRawWithPlugins). A
+  // stub entry before the package exists under ~/.openclaw/extensions can fail registry/schema
+  // validation and surface as: at Object.writeConfigFile (... auth-profiles ...).
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  mkdirSync(join(CONFIG_DIR, "extensions"), { recursive: true });
+
   let recoveredExistingDir = null;
   try {
     await runCommandWithEvents("openclaw", ["plugins", "install", modeConfig.pluginPackage], { onEvent });
@@ -261,6 +267,10 @@ async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorU
     }
     await runCommandWithEvents("openclaw", ["plugins", "install", modeConfig.pluginPackage], { onEvent });
   }
+
+  // Manifest is on disk now; merge orchestrator URL before enable (plugin config schema may require it).
+  seedPluginConfig(modeConfig, orchestratorUrl || "https://api.traderclaw.ai");
+
   await runCommandWithEvents("openclaw", ["plugins", "enable", modeConfig.pluginId], { onEvent });
   const list = await runCommandWithEvents("openclaw", ["plugins", "list"], { onEvent });
   const doctor = await runCommandWithEvents("openclaw", ["plugins", "doctor"], { onEvent });
