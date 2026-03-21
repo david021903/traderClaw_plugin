@@ -344,7 +344,8 @@ memory/
 | `solana_gateway_credentials_delete` | Delete gateway credentials |
 | `solana_gateway_forward_probe` | Probe gateway forwarding connectivity |
 | `solana_agent_sessions` | View agent session diagnostics |
-| `solana_startup_gate` | Run startup gate sequence |
+| `solana_startup_gate` | Run startup gate sequence (on success includes `welcomeMessage`) |
+| `solana_traderclaw_welcome` | Post-startup welcome for the user (includes API key when in config) |
 | `solana_runtime_status` | Get runtime status diagnostics |
 
 ### Local Durable State

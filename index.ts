@@ -64,6 +64,76 @@ function parseConfig(raw: unknown): PluginConfig {
   };
 }
 
+/** Post-startup welcome for the user; API key comes from plugin config when present. */
+function buildTraderClawWelcomeMessage(apiKeyForDisplay: string | null): string {
+  const keyBlock = apiKeyForDisplay
+    ? `Your TraderClaw API Key:\n\n${apiKeyForDisplay}\n\nUse this to connect your dashboard.`
+    : `Your API key is not stored in plaintext in this OpenClaw config (session-only or refresh-token flow). On the machine where you ran setup, run \`traderclaw config show\` to view it, or use the TraderClaw dashboard account settings.`;
+
+  return `🚀 TraderClaw is live.
+
+Connection established. The desk is up.
+
+I'm now watching the Solana memecoin market, tracking launches, ingesting alpha signals, and analyzing liquidity, wallets, and sentiment in real time.
+
+Nothing moves without context.
+Nothing executes without passing risk.
+
+
+🧠 How I operate
+
+I don't chase noise.
+
+Scan → analyze → score → validate → execute.
+Every trade is structured. Every decision is logged.
+
+And I evolve.
+
+Every outcome feeds back into the system.
+Patterns improve. Filters sharpen. Decisions get better over time.
+
+
+🔑 Access
+
+${keyBlock}
+
+
+⚙️ Get started
+
+1) Fund your wallet
+Send SOL to your trading wallet
+Ask: what is my wallet address?
+
+2) Choose operating mode
+HARDENED → defensive, selective
+DEGEN → aggressive, faster
+
+3) Give me a name (optional)
+Example: Your name is Atlas
+
+
+🤝 How we work together
+
+I operate autonomously, scanning, filtering, and acting when conditions make sense.
+
+You can guide or question decisions anytime.
+I will not execute trades that do not meet criteria.
+
+Think of this as a trading desk you work with, not a bot you micromanage.
+
+
+⚡ Command Examples (not limited)
+
+• scan for alpha → start hunting
+• status → full system check
+• pause trading → halt execution
+
+
+Start simple. Fund → set mode → observe.
+
+Let's see what the market gives us.`;
+}
+
 const solanaTraderPlugin = {
   id: "solana-trader",
   name: "Solana Trader",
@@ -1314,12 +1384,17 @@ const solanaTraderPlugin = {
           ts: Date.now(),
           steps,
         };
-        return {
+        const base = {
           ok: startupGateState.ok,
           ts: startupGateState.ts,
           steps,
           summary: { passed, failed },
         };
+        if (startupGateState.ok) {
+          const k = (config.apiKey && String(config.apiKey).trim()) || null;
+          return { ...base, welcomeMessage: buildTraderClawWelcomeMessage(k) };
+        }
+        return base;
       })()
         .finally(() => {
           startupGateRunning = null;
@@ -1441,6 +1516,17 @@ const solanaTraderPlugin = {
           force: Boolean(params.force),
         }),
       ),
+    });
+
+    api.registerTool({
+      name: "solana_traderclaw_welcome",
+      description:
+        "Returns the canonical TraderClaw welcome message for the user after startup checks pass, including their API key when it is stored in plugin config. Use when the user ran the manual 6-step startup checklist instead of solana_startup_gate.",
+      parameters: Type.Object({}),
+      execute: wrapExecute(async () => {
+        const k = (config.apiKey && String(config.apiKey).trim()) || null;
+        return { welcomeMessage: buildTraderClawWelcomeMessage(k) };
+      }),
     });
 
     api.registerTool({

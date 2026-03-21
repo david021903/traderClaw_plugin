@@ -102,6 +102,8 @@ Call solana_startup_gate({ autoFixGateway: true, force: true })
 
 Treat any `ok: false` step as a hard stop. Report the failing steps clearly and do not continue.
 
+**After `ok: true`:** The tool result includes `welcomeMessage` (full markdown). **Append it verbatim** to your reply after you summarize startup pass/fail — do not paraphrase or drop the API key section; the plugin injects the user's real key when it is in config.
+
 ### Startup Step 1: Verify System Connectivity
 
 ```
@@ -164,6 +166,8 @@ If the kill switch is active, enter Position Defense Mode immediately (see Step 
 **IF THIS FAILS → DO NOT PROCEED. You cannot make safe trading decisions without knowing your portfolio state. Report the error and stop.**
 
 **After all 4 startup steps complete → proceed to the trading loop (Step 0: INTERRUPT CHECK).**
+
+If you used this **manual** path (not `solana_startup_gate`), after every step has passed call `solana_traderclaw_welcome()` and **append** the returned `welcomeMessage` verbatim to your reply (same as the gate path).
 
 ### Startup Step 5: Forwarding Probe (recommended)
 
@@ -2559,6 +2563,7 @@ Each user configures their own X/Twitter API developer account tokens in the plu
 | Limits | `solana_entitlement_upgrade` | Upgrade account tier |
 | System | `solana_system_status` | System health |
 | Startup | `solana_startup_gate` | Run all 6 startup checks with auto-fix for gateway credentials |
+| Startup | `solana_traderclaw_welcome` | Post-startup welcome text (includes API key when in config); use after manual checklist |
 | Startup | `solana_gateway_forward_probe` | Test orchestrator→gateway push path end-to-end |
 | Diagnostics | `solana_runtime_status` | Plugin runtime state snapshot (startup gate, alpha stream, probe) |
 | Alpha | `solana_alpha_subscribe` | Subscribe to SpyFly alpha stream (pass `agentId` for Gateway forwarding) |
