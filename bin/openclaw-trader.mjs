@@ -1681,7 +1681,7 @@ function wizardHtml(defaults) {
       <div class="card checkout hidden" id="completionScreen">
         <h2>You Made It - Wizard Complete</h2>
         <p class="muted">TraderClaw core installation is done. Run these 2 commands in your VPS shell to finish setup and go live.</p>
-        <p class="muted">Before trading, continue with the remaining checklist in the install guide: <a href="https://traderclaw-docs.vercel.app/" target="_blank" rel="noopener noreferrer">https://traderclaw-docs.vercel.app/</a></p>
+        <p class="muted">Before trading, continue with the remaining checklist in the install guide: <a href="https://docs.traderclaw.ai/" target="_blank" rel="noopener noreferrer">https://docs.traderclaw.ai/</a></p>
         <p class="ok" id="setupSuccessText"></p>
         <div class="checkout-row">
           <code id="setupCommand"></code>
