@@ -99,7 +99,7 @@ traderclaw setup \
 Fallback when command not in PATH:
 
 ```bash
-node ~/.openclaw/extensions/solana-traderclaw-v1/bin/openclaw-trader.mjs setup ...
+node ~/.openclaw/extensions/solana-trader/bin/openclaw-trader.mjs setup ...
 ```
 
 ---
@@ -229,7 +229,7 @@ curl -H "Authorization: Bearer <gatewayToken>" <gatewayBaseUrl>/health
 
 If the log shows `at Object.writeConfigFile (.../auth-profiles-...js)` during `openclaw plugins install`, that is OpenClaw **validating** `~/.openclaw/openclaw.json` before write — not a generic disk error.
 
-**Required `orchestratorUrl`:** The plugin manifest marks `orchestratorUrl` as required. `openclaw plugins install` calls `writeConfigFile` **during** that command, so `plugins.entries.<id>.config.orchestratorUrl` must be present **before** install completes. The wizard seeds the current plugin id (`solana-traderclaw-v1`) and merges orchestrator URL for **legacy** entry keys still on disk from older releases (`solana-trader`, `traderclaw-v1`, e.g. v1.0.3 under `~/.openclaw/extensions/solana-trader/`).
+**Required `orchestratorUrl`:** The plugin manifest marks `orchestratorUrl` as required. `openclaw plugins install` calls `writeConfigFile` **during** that command, so `plugins.entries.<id>.config.orchestratorUrl` must be present **before** install completes. The wizard seeds the plugin id (`solana-trader`) and merges orchestrator URL for legacy entry keys still on disk from older releases (`traderclaw-v1`, `solana-traderclaw-v1`).
 
 **`agents.defaults.heartbeat`:** OpenClaw’s schema requires `agents.defaults.heartbeat` (can be `{}`) whenever `agents.defaults` exists. The wizard sets this in the LLM step.
 

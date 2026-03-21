@@ -1,0 +1,17 @@
+2026-03-21T04:52:25.533Z [INFO] Starting TraderClaw precheck
+2026-03-21T04:52:25.534Z [INFO] Mode: dry-run
+2026-03-21T04:52:25.534Z [INFO] Orchestrator URL: https://api.traderclaw.ai
+2026-03-21T04:52:25.544Z [PASS] node major >= 22 (found v24)
+2026-03-21T04:52:25.546Z [PASS] npm exists in PATH
+2026-03-21T04:52:25.548Z [WARN] openclaw missing (dry-run mode, not installing)
+2026-03-21T04:52:25.551Z [PASS] tailscale exists in PATH
+2026-03-21T04:52:26.200Z [PASS] orchestrator health endpoint reachable (https://api.traderclaw.ai/healthz)
+2026-03-21T04:52:26.203Z [WARN] skipping gateway status check (openclaw missing)
+2026-03-21T04:52:26.203Z [INFO] Manual staging run commands:
+2026-03-21T04:52:26.203Z [INFO]   1) traderclaw install --wizard
+2026-03-21T04:52:26.203Z [INFO]   2) In wizard, set LLM provider + credential and Telegram token
+2026-03-21T04:52:26.203Z [INFO]   3) Approve tailscale login in provided URL
+2026-03-21T04:52:26.203Z [INFO]   4) Confirm /v1/responses returns non-404 on funnel host
+2026-03-21T04:52:26.203Z [INFO]   5) Verify Telegram channel setup + probe
+2026-03-21T04:52:26.203Z [INFO]   6) Startup prompt check: solana_system_status, solana_alpha_subscribe, solana_positions
+2026-03-21T04:52:26.203Z [INFO] Precheck summary: pass=4 fail=0 warn=2

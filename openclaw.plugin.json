@@ -1,8 +1,8 @@
 {
-  "id": "solana-traderclaw-v1",
+  "id": "solana-trader",
   "name": "Solana Trader",
   "description": "Autonomous Solana memecoin trading agent plugin — connects OpenClaw to a trading orchestrator for scanning, analysis, risk management, and execution.",
-  "skills": ["skills/solana-traderclaw-v1"],
+  "skills": ["skills/solana-trader"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

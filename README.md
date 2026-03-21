@@ -34,7 +34,7 @@ The plugin gives OpenClaw tools to interact with the Solana trading orchestrator
 
 ### 1. Install the plugin
 
-The npm package name **`solana-traderclaw-v1`** matches the OpenClaw manifest id (`solana-traderclaw-v1` in `plugins.entries`), so the gateway does not log a plugin id mismatch on restart. The global CLI binary is **`traderclaw`**.
+The npm package name is **`solana-traderclaw-v1`**; the OpenClaw plugin id (used in `plugins.entries`) is **`solana-trader`**. The global CLI binary is **`traderclaw`**.
 
 ```bash
 npm install -g solana-traderclaw-v1@1.0.6
@@ -165,7 +165,7 @@ If you prefer to configure manually instead of using the CLI, add to `~/.opencla
 {
   plugins: {
     entries: {
-      "solana-traderclaw-v1": {
+      "solana-trader": {
         enabled: true,
         config: {
           orchestratorUrl: "https://api.traderclaw.ai",
@@ -398,7 +398,7 @@ memory/
 
 ## Skills
 
-### solana-traderclaw-v1 (Trading Skill v5)
+### solana-trader (Trading Skill v5)
 The primary skill that teaches OpenClaw the complete trading lifecycle:
 
 1. **SCAN** — Find opportunities with launch/hot-pair scanners

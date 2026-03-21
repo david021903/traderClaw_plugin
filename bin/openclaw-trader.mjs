@@ -10,7 +10,7 @@ import { createServer } from "http";
 import { sortModelsByPreference } from "./llm-model-preference.mjs";
 
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')).version;
-const PLUGIN_ID = "solana-traderclaw-v1";
+const PLUGIN_ID = "solana-trader";
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 const WALLET_PRIVATE_KEY_ENV = "TRADERCLAW_WALLET_PRIVATE_KEY";
@@ -867,7 +867,7 @@ async function cmdSetup(args) {
 `);
   print(`  Runtime wallet proof key source: --wallet-private-key or env ${WALLET_PRIVATE_KEY_ENV} (never openclaw.json)`);
   print("Next steps:");
-  print("  1. Install the plugin:     openclaw plugins install solana-traderclaw-v1");
+  print("  1. Install the plugin:     openclaw plugins install solana-traderclaw-v1 (or: npm install -g solana-traderclaw-v1)");
   print("  2. Restart the gateway:    openclaw gateway --restart");
   print("  3. Start trading:          Ask OpenClaw to scan for opportunities");
   print("");
@@ -2092,7 +2092,7 @@ async function cmdInstall(args) {
   const { createInstallerStepEngine } = await import("./installer-step-engine.mjs");
   const modeConfig = {
     pluginPackage: "solana-traderclaw-v1",
-    pluginId: "solana-traderclaw-v1",
+    pluginId: "solana-trader",
     cliName: "traderclaw",
     gatewayConfig: "gateway-v1.json5",
     agents: ["cto", "onchain-analyst", "alpha-signal-analyst", "risk-officer", "strategy-researcher"],

@@ -8,8 +8,8 @@ import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 
-/** Older npm / plugin ids (pre–solana-traderclaw-v1 rename) — still present in ~/.openclaw/extensions on upgrades. */
-const LEGACY_TRADER_PLUGIN_IDS = ["solana-trader", "traderclaw-v1"];
+/** Older npm / plugin ids that may linger in ~/.openclaw/extensions on upgrades. */
+const LEGACY_TRADER_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1"];
 
 function stripAnsi(text) {
   if (typeof text !== "string") return text;
@@ -344,7 +344,7 @@ function seedPluginConfig(modeConfig, orchestratorUrl, configPath = CONFIG_FILE)
 
   // Do not set plugins.allow here: OpenClaw validates allow[] against the plugin registry, and
   // the id is not registered until after `openclaw plugins install`. Pre-seeding allow caused:
-  // "plugins.allow: plugin not found: solana-traderclaw-v1".
+  // "plugins.allow: plugin not found: <id>".
 
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
