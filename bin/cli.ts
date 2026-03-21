@@ -6,7 +6,7 @@ import { join } from "path";
 import { homedir } from "os";
 
 const VERSION = "1.0.0";
-const PLUGIN_ID = "solana-trader";
+const PLUGIN_ID = "solana-traderclaw-v1";
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 
@@ -308,7 +308,7 @@ async function cmdSetup(args: string[]) {
   Config:        ${CONFIG_FILE}
 `);
   print("Next steps:");
-  print("  1. Install the plugin:     openclaw plugins install @openclaw/solana-trader");
+  print("  1. Install the plugin:     openclaw plugins install solana-traderclaw-v1");
   print("  2. Restart the gateway:    openclaw gateway --restart");
   print("  3. Start trading:          Ask OpenClaw to scan for opportunities");
   print("");

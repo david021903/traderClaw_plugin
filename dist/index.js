@@ -686,19 +686,19 @@ function parseConfig(raw) {
   };
 }
 var solanaTraderPlugin = {
-  id: "solana-trader",
+  id: "solana-traderclaw-v1",
   name: "Solana Trader",
   description: "Autonomous Solana memecoin trading agent \u2014 orchestrator integration",
   register(api) {
     const config = parseConfig(api.pluginConfig);
     const { orchestratorUrl, walletId, apiKey, apiTimeout } = config;
     if (!orchestratorUrl) {
-      api.logger.error("[solana-trader] orchestratorUrl is required in plugin config. Run: traderclaw setup");
+      api.logger.error("[solana-traderclaw-v1] orchestratorUrl is required in plugin config. Run: traderclaw setup");
       return;
     }
     if (!apiKey && !config.refreshToken) {
       api.logger.error(
-        "[solana-trader] apiKey or refreshToken is required. Tell the user to run on their machine: traderclaw setup --signup (or traderclaw signup) for a new account, or traderclaw setup / traderclaw login if they already have an API key. The agent cannot sign up or edit credentials."
+        "[solana-traderclaw-v1] apiKey or refreshToken is required. Tell the user to run on their machine: traderclaw setup --signup (or traderclaw signup) for a new account, or traderclaw setup / traderclaw login if they already have an API key. The agent cannot sign up or edit credentials."
       );
       return;
     }
@@ -715,17 +715,17 @@ var solanaTraderPlugin = {
       timeout: apiTimeout,
       onTokensRotated: (tokens) => {
         api.logger.info(
-          `[solana-trader] Session tokens rotated. New refreshToken: ${tokens.refreshToken.slice(0, 8)}... Update config with: traderclaw config set refreshToken ${tokens.refreshToken}`
+          `[solana-traderclaw-v1] Session tokens rotated. New refreshToken: ${tokens.refreshToken.slice(0, 8)}... Update config with: traderclaw config set refreshToken ${tokens.refreshToken}`
         );
       },
       logger: {
-        info: (msg) => api.logger.info(`[solana-trader] ${msg}`),
-        warn: (msg) => api.logger.warn(`[solana-trader] ${msg}`),
-        error: (msg) => api.logger.error(`[solana-trader] ${msg}`)
+        info: (msg) => api.logger.info(`[solana-traderclaw-v1] ${msg}`),
+        warn: (msg) => api.logger.warn(`[solana-traderclaw-v1] ${msg}`),
+        error: (msg) => api.logger.error(`[solana-traderclaw-v1] ${msg}`)
       }
     });
     const onUnauthorized = async () => {
-      api.logger.warn("[solana-trader] Received 401 \u2014 refreshing session...");
+      api.logger.warn("[solana-traderclaw-v1] Received 401 \u2014 refreshing session...");
       return sessionManager.handleUnauthorized();
     };
     const post = async (path2, body, extraHeaders) => {
@@ -1463,7 +1463,7 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_bitquery_catalog",
-      description: "Run a pre-built Bitquery query template from the catalog. Use solana_bitquery_templates first to discover available templates. Templates cover Pump.fun creation/metadata/price/trades/holders, PumpSwap post-migration, launchpad analytics, exchange-specific suites (Raydium/Jupiter/BonkSwap), and generic DEX analytics. See query-catalog.md in the solana-trader skill for the full reference.",
+      description: "Run a pre-built Bitquery query template from the catalog. Use solana_bitquery_templates first to discover available templates. Templates cover Pump.fun creation/metadata/price/trades/holders, PumpSwap post-migration, launchpad analytics, exchange-specific suites (Raydium/Jupiter/BonkSwap), and generic DEX analytics. See query-catalog.md in the solana-traderclaw-v1 skill for the full reference.",
       parameters: Type.Object({
         templatePath: Type.String({ description: "Template path in 'category.key' format (e.g., 'pumpFunHoldersRisk.first100Buyers')" }),
         variables: Type.Object({}, { additionalProperties: true, description: "Variables required by the template (e.g., { token: 'MINT_ADDRESS', since: '2025-01-01T00:00:00Z' })" })
@@ -1477,7 +1477,7 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_bitquery_query",
-      description: "Run a custom raw GraphQL query against the Bitquery v2 EAP endpoint for Solana on-chain data. Use this when no pre-built template fits your needs. IMPORTANT: Consult bitquery-schema.md in the solana-trader skill before writing queries \u2014 DEXTrades and DEXTradeByTokens have different field shapes and mixing them causes errors. The schema reference includes a decision guide, correct field paths, aggregate keys, and a common error fix map.",
+      description: "Run a custom raw GraphQL query against the Bitquery v2 EAP endpoint for Solana on-chain data. Use this when no pre-built template fits your needs. IMPORTANT: Consult bitquery-schema.md in the solana-traderclaw-v1 skill before writing queries \u2014 DEXTrades and DEXTradeByTokens have different field shapes and mixing them causes errors. The schema reference includes a decision guide, correct field paths, aggregate keys, and a common error fix map.",
       parameters: Type.Object({
         query: Type.String({ description: "Raw GraphQL query string (query or subscription operation)" }),
         variables: Type.Optional(Type.Object({}, { additionalProperties: true, description: "GraphQL variables (e.g., { token: 'MINT_ADDRESS', since: '2025-01-01T00:00:00Z' })" }))
@@ -1491,7 +1491,7 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_bitquery_subscribe",
-      description: "Subscribe to a managed real-time Bitquery data stream. The orchestrator manages the WebSocket connection and broadcasts events. Available templates: realtimeTokenPricesSolana, ohlc1s, dexPoolLiquidityChanges, pumpFunTokenCreation, pumpFunTrades, pumpSwapTrades, raydiumNewPools. Returns a subscriptionId for tracking. Pass agentId to enable event-to-agent forwarding \u2014 orchestrator delivers each event to your Gateway via /v1/responses in addition to normal WS delivery. Subscriptions expire after 24h and emit subscription_expiring/subscription_expired events. See websocket-streaming.md in the solana-trader skill for the full message contract and usage patterns.",
+      description: "Subscribe to a managed real-time Bitquery data stream. The orchestrator manages the WebSocket connection and broadcasts events. Available templates: realtimeTokenPricesSolana, ohlc1s, dexPoolLiquidityChanges, pumpFunTokenCreation, pumpFunTrades, pumpSwapTrades, raydiumNewPools. Returns a subscriptionId for tracking. Pass agentId to enable event-to-agent forwarding \u2014 orchestrator delivers each event to your Gateway via /v1/responses in addition to normal WS delivery. Subscriptions expire after 24h and emit subscription_expiring/subscription_expired events. See websocket-streaming.md in the solana-traderclaw-v1 skill for the full message contract and usage patterns.",
       parameters: Type.Object({
         templateKey: Type.String({ description: "Subscription template key (e.g., 'pumpFunTrades', 'ohlc1s', 'realtimeTokenPricesSolana')" }),
         variables: Type.Optional(Type.Object({}, { additionalProperties: true, description: "Template variables (e.g., { token: 'MINT_ADDRESS' })" })),
@@ -1597,9 +1597,9 @@ var solanaTraderPlugin = {
       buffer: alphaBuffer,
       agentId: config.agentId,
       logger: {
-        info: (msg) => api.logger.info(`[solana-trader] ${msg}`),
-        warn: (msg) => api.logger.warn(`[solana-trader] ${msg}`),
-        error: (msg) => api.logger.error(`[solana-trader] ${msg}`)
+        info: (msg) => api.logger.info(`[solana-traderclaw-v1] ${msg}`),
+        warn: (msg) => api.logger.warn(`[solana-traderclaw-v1] ${msg}`),
+        error: (msg) => api.logger.error(`[solana-traderclaw-v1] ${msg}`)
       }
     });
     let startupGateRunning = null;
@@ -2506,11 +2506,11 @@ ${String(params.summary)}
             name: `${bootAgentId}-durable-state.json`,
             path: `state/${bootAgentId}.json`,
             content: JSON.stringify(stateData, null, 2),
-            source: "solana-trader:state"
+            source: "solana-traderclaw-v1:state"
           });
         }
       } catch (err) {
-        api.logger.warn(`[solana-trader] Bootstrap: failed to load state for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
+        api.logger.warn(`[solana-traderclaw-v1] Bootstrap: failed to load state for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
       }
       try {
         const logFile = path.join(logsDir, bootAgentId, "decisions.jsonl");
@@ -2520,11 +2520,11 @@ ${String(params.summary)}
             name: `${bootAgentId}-decision-log.jsonl`,
             path: `logs/${bootAgentId}/decisions.jsonl`,
             content: decisions.map((d) => JSON.stringify(d)).join("\n"),
-            source: "solana-trader:decisions"
+            source: "solana-traderclaw-v1:decisions"
           });
         }
       } catch (err) {
-        api.logger.warn(`[solana-trader] Bootstrap: failed to load decisions for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
+        api.logger.warn(`[solana-traderclaw-v1] Bootstrap: failed to load decisions for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
       }
       try {
         const bulletinFile = path.join(sharedLogsDir, "team-bulletin.jsonl");
@@ -2537,11 +2537,11 @@ ${String(params.summary)}
             name: "team-bulletin.jsonl",
             path: "logs/shared/team-bulletin.jsonl",
             content: filtered.map((e) => JSON.stringify(e)).join("\n"),
-            source: "solana-trader:bulletin"
+            source: "solana-traderclaw-v1:bulletin"
           });
         }
       } catch (err) {
-        api.logger.warn(`[solana-trader] Bootstrap: failed to load bulletin for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
+        api.logger.warn(`[solana-traderclaw-v1] Bootstrap: failed to load bulletin for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
       }
       try {
         const snapshotFile = path.join(stateDir, "context-snapshot.json");
@@ -2551,11 +2551,11 @@ ${String(params.summary)}
             name: "context-snapshot.json",
             path: "state/context-snapshot.json",
             content: JSON.stringify(snapshot, null, 2),
-            source: "solana-trader:snapshot"
+            source: "solana-traderclaw-v1:snapshot"
           });
         }
       } catch (err) {
-        api.logger.warn(`[solana-trader] Bootstrap: failed to load snapshot for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
+        api.logger.warn(`[solana-traderclaw-v1] Bootstrap: failed to load snapshot for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
       }
       let entitlementData = null;
       try {
@@ -2568,7 +2568,7 @@ ${String(params.summary)}
           }
         }
       } catch (fetchErr) {
-        api.logger.warn(`[solana-trader] Bootstrap: live entitlement fetch failed for ${bootAgentId}: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`);
+        api.logger.warn(`[solana-traderclaw-v1] Bootstrap: live entitlement fetch failed for ${bootAgentId}: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`);
       }
       if (!entitlementData) {
         try {
@@ -2591,30 +2591,30 @@ ${String(params.summary)}
       }
       if (!entitlementData) {
         entitlementData = { tier: "starter", maxPositions: 3, maxPositionSizeSol: 0.1, source: "conservative-default", cachedAt: (/* @__PURE__ */ new Date()).toISOString() };
-        api.logger.warn(`[solana-trader] Bootstrap: no entitlement source available for ${bootAgentId}, injecting conservative Starter defaults`);
+        api.logger.warn(`[solana-traderclaw-v1] Bootstrap: no entitlement source available for ${bootAgentId}, injecting conservative Starter defaults`);
       }
       context.bootstrapFiles.push({
         name: "active-entitlements.json",
         path: "state/entitlement-cache.json",
         content: JSON.stringify(entitlementData, null, 2),
-        source: "solana-trader:entitlements"
+        source: "solana-traderclaw-v1:entitlements"
       });
-      api.logger.info(`[solana-trader] Bootstrap: injected ${context.bootstrapFiles.length} files for agent ${bootAgentId}`);
+      api.logger.info(`[solana-traderclaw-v1] Bootstrap: injected ${context.bootstrapFiles.length} files for agent ${bootAgentId}`);
     });
     api.registerHook("memory:flush", async (context) => {
       const flushAgentId = sanitizeAgentId(context.agentId || agentId);
-      api.logger.info(`[solana-trader] Memory flush triggered for agent ${flushAgentId}`);
+      api.logger.info(`[solana-traderclaw-v1] Memory flush triggered for agent ${flushAgentId}`);
       try {
         const stateFile = path.join(stateDir, `${flushAgentId}.json`);
         const stateData = readJsonFile(stateFile);
         if (stateData?.state) {
           writeMemoryMd(flushAgentId, stateData.state);
-          api.logger.info(`[solana-trader] Memory flush: MEMORY.md updated from persisted state for ${flushAgentId}`);
+          api.logger.info(`[solana-traderclaw-v1] Memory flush: MEMORY.md updated from persisted state for ${flushAgentId}`);
         } else {
-          api.logger.info(`[solana-trader] Memory flush: no persisted state found for ${flushAgentId} \u2014 MEMORY.md not updated`);
+          api.logger.info(`[solana-traderclaw-v1] Memory flush: no persisted state found for ${flushAgentId} \u2014 MEMORY.md not updated`);
         }
       } catch (err) {
-        api.logger.warn(`[solana-trader] Memory flush: failed to write MEMORY.md for ${flushAgentId}: ${err instanceof Error ? err.message : String(err)}`);
+        api.logger.warn(`[solana-traderclaw-v1] Memory flush: failed to write MEMORY.md for ${flushAgentId}: ${err instanceof Error ? err.message : String(err)}`);
       }
       try {
         const now = /* @__PURE__ */ new Date();
@@ -2637,24 +2637,24 @@ Context compaction triggered. MEMORY.md synced from last persisted state. Decisi
           fs.appendFileSync(logPath, entry, "utf-8");
         }
       } catch (err) {
-        api.logger.warn(`[solana-trader] Memory flush: failed to write daily log for ${flushAgentId}: ${err instanceof Error ? err.message : String(err)}`);
+        api.logger.warn(`[solana-traderclaw-v1] Memory flush: failed to write daily log for ${flushAgentId}: ${err instanceof Error ? err.message : String(err)}`);
       }
     });
     api.registerService({
-      id: "solana-trader-session",
+      id: "solana-traderclaw-v1-session",
       start: async () => {
         try {
           await sessionManager.initialize();
           const info = sessionManager.getSessionInfo();
           api.logger.info(
-            `[solana-trader] Session active. Tier: ${info.tier}, Scopes: ${info.scopes.join(", ")}`
+            `[solana-traderclaw-v1] Session active. Tier: ${info.tier}, Scopes: ${info.scopes.join(", ")}`
           );
         } catch (err) {
           api.logger.error(
-            `[solana-trader] Session initialization failed: ${err instanceof Error ? err.message : String(err)}`
+            `[solana-traderclaw-v1] Session initialization failed: ${err instanceof Error ? err.message : String(err)}`
           );
           api.logger.error(
-            "[solana-trader] Trading tools will fail until session is established. User should run on this machine: traderclaw login (after logout) or traderclaw setup / traderclaw signup for a new account. Wallet proof uses local signing only \u2014 private key never leaves this system."
+            "[solana-traderclaw-v1] Trading tools will fail until session is established. User should run on this machine: traderclaw login (after logout) or traderclaw setup / traderclaw signup for a new account. Wallet proof uses local signing only \u2014 private key never leaves this system."
           );
           return;
         }
@@ -2667,45 +2667,45 @@ Context compaction triggered. MEMORY.md synced from last persisted state. Decisi
             accessToken: await sessionManager.getAccessToken()
           });
           api.logger.info(
-            `[solana-trader] Orchestrator healthz OK at ${orchestratorUrl}`
+            `[solana-traderclaw-v1] Orchestrator healthz OK at ${orchestratorUrl}`
           );
           if (healthz && typeof healthz === "object") {
             const h = healthz;
             api.logger.info(
-              `[solana-trader] Mode: ${h.executionMode || "unknown"}, Upstream: ${h.upstreamConfigured ? "yes" : "no"}`
+              `[solana-traderclaw-v1] Mode: ${h.executionMode || "unknown"}, Upstream: ${h.upstreamConfigured ? "yes" : "no"}`
             );
           }
         } catch (err) {
           api.logger.warn(
-            `[solana-trader] /healthz unreachable at ${orchestratorUrl}: ${err instanceof Error ? err.message : String(err)}`
+            `[solana-traderclaw-v1] /healthz unreachable at ${orchestratorUrl}: ${err instanceof Error ? err.message : String(err)}`
           );
         }
         try {
           const status = await get("/api/system/status");
           api.logger.info(
-            `[solana-trader] Connected to orchestrator (walletId: ${walletId})`
+            `[solana-traderclaw-v1] Connected to orchestrator (walletId: ${walletId})`
           );
           if (status && typeof status === "object") {
-            api.logger.info(`[solana-trader] System status: ${JSON.stringify(status)}`);
+            api.logger.info(`[solana-traderclaw-v1] System status: ${JSON.stringify(status)}`);
           }
         } catch (err) {
           api.logger.warn(
-            `[solana-trader] /api/system/status unreachable: ${err instanceof Error ? err.message : String(err)}`
+            `[solana-traderclaw-v1] /api/system/status unreachable: ${err instanceof Error ? err.message : String(err)}`
           );
         }
         try {
           const startupGate = await runStartupGate({ autoFixGateway: true, force: true });
           api.logger.info(
-            `[solana-trader] Startup gate completed: ok=${startupGate.ok}, passed=${startupGate.summary.passed}, failed=${startupGate.summary.failed}`
+            `[solana-traderclaw-v1] Startup gate completed: ok=${startupGate.ok}, passed=${startupGate.summary.passed}, failed=${startupGate.summary.failed}`
           );
           if (!startupGate.ok) {
             api.logger.warn(
-              `[solana-trader] Startup gate failures: ${JSON.stringify(startupGate.steps.filter((step) => !step.ok))}`
+              `[solana-traderclaw-v1] Startup gate failures: ${JSON.stringify(startupGate.steps.filter((step) => !step.ok))}`
             );
           }
         } catch (err) {
           api.logger.warn(
-            `[solana-trader] Startup gate run failed: ${err instanceof Error ? err.message : String(err)}`
+            `[solana-traderclaw-v1] Startup gate run failed: ${err instanceof Error ? err.message : String(err)}`
           );
         }
         try {
@@ -2714,20 +2714,20 @@ Context compaction triggered. MEMORY.md synced from last persisted state. Decisi
             source: "service_startup"
           });
           api.logger.info(
-            `[solana-trader] Forward probe result: ${JSON.stringify(probe)}`
+            `[solana-traderclaw-v1] Forward probe result: ${JSON.stringify(probe)}`
           );
         } catch (err) {
           api.logger.warn(
-            `[solana-trader] Forward probe failed: ${err instanceof Error ? err.message : String(err)}`
+            `[solana-traderclaw-v1] Forward probe failed: ${err instanceof Error ? err.message : String(err)}`
           );
         }
       }
     });
-    registerXReadTools(api, Type, config.xConfig, config.agentId || "main", "[solana-trader]");
-    registerWebFetchTool(api, Type, "[solana-trader]");
+    registerXReadTools(api, Type, config.xConfig, config.agentId || "main", "[solana-traderclaw-v1]");
+    registerWebFetchTool(api, Type, "[solana-traderclaw-v1]");
     const xToolCount = config.xConfig?.ok ? 3 : 0;
     api.logger.info(
-      `[solana-trader] Registered ${67 + xToolCount} tools (67 trading + ${xToolCount} X/Twitter read) for walletId ${walletId} (session auth mode)`
+      `[solana-traderclaw-v1] Registered ${67 + xToolCount} tools (67 trading + ${xToolCount} X/Twitter read) for walletId ${walletId} (session auth mode)`
     );
   }
 };

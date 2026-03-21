@@ -1,7 +1,7 @@
 ---
-name: solana-trader
+name: solana-traderclaw-v1
 description: Solana memecoin trading agent v5 — self-improving strategy, lifecycle-aware entries, anti-rug heuristics, and selectable mode (HARDENED | DEGEN)
-metadata: { "openclaw": { "emoji": "🦀", "skillKey": "solana-trader", "requires": { "config": ["plugins.entries.solana-trader.enabled"] } } }
+metadata: { "openclaw": { "emoji": "🦀", "skillKey": "solana-traderclaw-v1", "requires": { "config": ["plugins.entries.solana-traderclaw-v1.enabled"] } } }
 ---
 
 # Solana Memecoin Trading Agent

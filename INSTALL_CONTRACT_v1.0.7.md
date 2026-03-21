@@ -1,6 +1,6 @@
 # TraderClaw Install Contract (v1.0.7)
 
-This document defines the canonical installation and onboarding contract for `solana-trader@1.0.6` (npm package id aligned with OpenClaw manifest `solana-trader`; legacy `traderclaw-v1@1.0.7` installs may show an id-hint warning until migrated).
+This document defines the canonical installation and onboarding contract for `solana-traderclaw-v1@1.0.6` (npm package id aligned with OpenClaw manifest `solana-traderclaw-v1`; legacy `traderclaw-v1@1.0.7` installs may show an id-hint warning until migrated).
 
 Use this as the source of truth for:
 - CLI docs
@@ -12,7 +12,7 @@ Use this as the source of truth for:
 ## 1) Goals
 
 A successful install means all of the following are true:
-- plugin is installed and loaded as `solana-trader`
+- plugin is installed and loaded as `solana-traderclaw-v1`
 - setup completed with wallet + session credentials written
 - user can choose either:
   - **Quick local mode** (no gateway registration yet), or
