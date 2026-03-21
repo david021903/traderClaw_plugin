@@ -9,7 +9,7 @@ import {
 } from "./chunk-T4YWGIIR.js";
 import {
   SessionManager
-} from "./chunk-475KDM2K.js";
+} from "./chunk-RQZVD6TH.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
@@ -1116,7 +1116,7 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_trade_execute",
-      description: "Execute a trade on Solana via the SpyFly bot. Enforces risk rules before proxying to on-chain execution. Returns trade ID, position ID, and transaction signature.",
+      description: "Execute a trade on Solana via the SpyFly bot. Enforces risk rules before proxying to on-chain execution. Returns trade ID, position ID, and transaction signature. IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain \u2014 use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%).",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
@@ -1124,7 +1124,31 @@ var solanaTraderPlugin = {
         symbol: Type.String({ description: "Token symbol (e.g., BONK, WIF)" }),
         slippageBps: Type.Optional(Type.Number({ description: "Slippage in basis points (default: 300)" })),
         slPct: Type.Optional(Type.Number({ description: "Stop-loss percentage (e.g., 15 = 15% below entry)" })),
-        tpLevels: Type.Optional(Type.Array(Type.Number(), { description: "Take-profit levels as percentages (e.g., [25, 50, 100])" })),
+        tpLevels: Type.Optional(
+          Type.Array(Type.Number(), {
+            description: "TP gain % from entry only \u2014 each level defaults to selling 100% of position. Prefer tpExits when you want partial sells."
+          })
+        ),
+        tpExits: Type.Optional(
+          Type.Array(
+            Type.Object({
+              percent: Type.Number({ description: "Take-profit trigger: % gain from entry (e.g. 10 = +10%)" }),
+              amountPct: Type.Number({
+                description: "% of position to sell at this TP (1\u2013100). Example: [{percent:10,amountPct:50},{percent:15,amountPct:100}]"
+              })
+            }),
+            { description: "Per-level take-profit sizes. Sent to API as tpExits; overrides plain tpLevels for sizing." }
+          )
+        ),
+        slExits: Type.Optional(
+          Type.Array(
+            Type.Object({
+              percent: Type.Number({ description: "Stop-loss trigger: % drawdown from entry" }),
+              amountPct: Type.Number({ description: "% of position to close at this SL level (1\u2013100)" })
+            }),
+            { description: "Multi-level stop-loss with partial exits (optional). Otherwise use slPct for a single full exit." }
+          )
+        ),
         trailingStopPct: Type.Optional(Type.Number({ description: "Trailing stop percentage" })),
         managementMode: Type.Optional(
           Type.Union([Type.Literal("LOCAL_MANAGED"), Type.Literal("SERVER_MANAGED")], {
@@ -1138,17 +1162,28 @@ var solanaTraderPlugin = {
         if (params.idempotencyKey) {
           headers["x-idempotency-key"] = String(params.idempotencyKey);
         }
-        return post("/api/trade/execute", {
+        const body = {
           tokenAddress: params.tokenAddress,
           side: params.side,
           sizeSol: params.sizeSol,
           symbol: params.symbol,
           slippageBps: params.slippageBps,
           slPct: params.slPct,
-          tpLevels: params.tpLevels,
           trailingStopPct: params.trailingStopPct,
           managementMode: params.managementMode
-        }, Object.keys(headers).length > 0 ? headers : void 0);
+        };
+        const tpExits = params.tpExits;
+        const slExits = params.slExits;
+        if (Array.isArray(tpExits) && tpExits.length > 0) {
+          body.tpExits = tpExits;
+        }
+        if (Array.isArray(params.tpLevels) && params.tpLevels.length > 0) {
+          body.tpLevels = params.tpLevels;
+        }
+        if (Array.isArray(slExits) && slExits.length > 0) {
+          body.slExits = slExits;
+        }
+        return post("/api/trade/execute", body, Object.keys(headers).length > 0 ? headers : void 0);
       })
     });
     api.registerTool({

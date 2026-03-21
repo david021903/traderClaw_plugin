@@ -1022,14 +1022,18 @@ export class InstallerStepEngine {
     }
 
     const command = [this.modeConfig.cliName, ...args].join(" ");
+    const docs =
+      "https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out";
     return {
       pending: true,
       command,
       title: "Ready to launch your agentic trading desk",
       message:
-        "Core install is complete. Final setup is intentionally handed off to your VPS shell so sensitive wallet prompts stay private.",
+        "Core install is complete. Final setup is intentionally handed off to your VPS shell so sensitive wallet prompts stay private. " +
+        "After setup, if the bot reports wallet proof / session errors: configure TRADERCLAW_WALLET_PRIVATE_KEY for the OpenClaw gateway service (systemd), not only in SSH — see " +
+        docs,
       hint:
-        "Run the command in terminal, answer setup prompts, then restart gateway.",
+        "Run the command in terminal, answer setup prompts, then restart gateway. If Telegram startup checks all fail, open the troubleshooting link in the message above.",
       restartCommand: "openclaw gateway restart",
     };
   }

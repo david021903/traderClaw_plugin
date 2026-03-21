@@ -15,6 +15,20 @@ const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 const WALLET_PRIVATE_KEY_ENV = "TRADERCLAW_WALLET_PRIVATE_KEY";
 
+/** Linked from CLI errors and setup — keep in sync with SKILL / README. */
+const TRADERCLAW_SESSION_TROUBLESHOOTING_URL =
+  "https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out";
+
+function printSessionTroubleshootingHint() {
+  printWarn(`  Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING_URL}`);
+  printWarn(
+    "  Wallet proof is not signup — it proves you own the trading wallet already linked to your API key.",
+  );
+  printWarn(
+    "  The OpenClaw gateway is a separate process: export in SSH alone does not set the key for the gateway. Use systemd EnvironmentFile (or equivalent) so TRADERCLAW_WALLET_PRIVATE_KEY is available to the gateway service.",
+  );
+}
+
 const BANNER = `
  ████████╗██████╗  █████╗ ██████╗ ███████╗██████╗  ██████╗██╗      █████╗ ██╗    ██╗
  ╚══██╔══╝██╔══██╗██╔══██╗██╔══██╗██╔════╝██╔══██╗██╔════╝██║     ██╔══██╗██║    ██║
@@ -433,6 +447,7 @@ async function establishSession(orchestratorUrl, pluginConfig, walletPrivateKeyI
     if (!walletPrivateKey) {
       printError(`  Wallet private key not available. Cannot prove wallet ownership.`);
       printError(`  Provide it via --wallet-private-key or env ${WALLET_PRIVATE_KEY_ENV} for local signing.`);
+      printSessionTroubleshootingHint();
       throw new Error("Wallet proof required but no private key configured.");
     }
     walletPubKey = challenge.walletPublicKey || pluginConfig.walletPublicKey;
@@ -592,6 +607,9 @@ async function cmdSetup(args) {
     sessionTokens = await establishSession(orchestratorUrl, pluginConfig, runtimeWalletPrivateKey);
   } catch (err) {
     printError(`Session establishment failed: ${err.message}`);
+    if (String(err.message || "").includes("Wallet proof")) {
+      printSessionTroubleshootingHint();
+    }
     printWarn("Saving config without session. You can retry with: traderclaw login");
 
     const existingConfig = readConfig();
@@ -866,6 +884,9 @@ async function cmdSetup(args) {
   Config:        ${CONFIG_FILE}
 `);
   print(`  Runtime wallet proof key source: --wallet-private-key or env ${WALLET_PRIVATE_KEY_ENV} (never openclaw.json)`);
+  printWarn(
+    `  For the OpenClaw gateway (Telegram/agent tools), the same env must be set on the gateway service — not only in this shell. See: ${TRADERCLAW_SESSION_TROUBLESHOOTING_URL}`,
+  );
   print("Next steps:");
   print("  1. Install the plugin:     openclaw plugins install solana-traderclaw-v1 (or: npm install -g solana-traderclaw-v1)");
   print("  2. Restart the gateway:    openclaw gateway --restart");
@@ -904,13 +925,21 @@ async function cmdLogin(args) {
   print("=".repeat(45));
 
   let walletPrivateKeyArg = "";
+  let forceReauth = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--wallet-private-key" && args[i + 1]) {
       walletPrivateKeyArg = args[++i];
     }
+    if (args[i] === "--force-reauth") {
+      forceReauth = true;
+    }
   }
 
-  pluginConfig.refreshToken = undefined;
+  if (forceReauth) {
+    pluginConfig.refreshToken = undefined;
+    printInfo("  --force-reauth: starting full challenge (refresh token cleared).");
+  }
+
   const removedLegacyKey = removeLegacyWalletPrivateKey(pluginConfig);
 
   try {
@@ -921,11 +950,14 @@ async function cmdLogin(args) {
     if (removedLegacyKey) {
       printWarn("  Removed deprecated walletPrivateKey from openclaw.json.");
     }
-    printInfo(`  For wallet proof, pass --wallet-private-key or set ${WALLET_PRIVATE_KEY_ENV}.`);
+    printInfo(`  For wallet proof after refresh expires, pass --wallet-private-key or set ${WALLET_PRIVATE_KEY_ENV} (gateway service needs the env too — see docs).`);
     print("  Restart the gateway for changes to take effect: openclaw gateway --restart");
-    print("  Or re-run login: traderclaw login\n");
+    print("  Full re-challenge (e.g. after logout): traderclaw login --force-reauth\n");
   } catch (err) {
     printError(`Login failed: ${err.message}`);
+    if (String(err.message || "").includes("Wallet proof") || String(err.message || "").includes("private key")) {
+      printSessionTroubleshootingHint();
+    }
     process.exit(1);
   }
 }
@@ -2294,7 +2326,7 @@ Commands:
   signup             Create a new account (alias for: setup --signup; run locally, not via the agent)
   precheck           Run environment checks (dry-run or allow-install)
   install            Launch installer flows (--wizard for localhost GUI)
-  login              Re-authenticate (challenge flow, new session)
+  login              Re-authenticate (uses refresh token when valid; full challenge only if needed)
   logout             Revoke current session and clear tokens
   status             Check connection health and wallet status
   config             View and manage configuration
@@ -2310,6 +2342,10 @@ Setup options:
   --show-api-key     Extra hint after signup (full key is always shown once; confirm with API_KEY_STORED)
   --show-wallet-private-key  Reveal full wallet private key in setup output
   --signup           Force signup flow (create new account)
+
+Login options:
+  --wallet-private-key <k>  Base58 key for wallet proof when the server requires it (runtime only)
+  --force-reauth       Clear refresh token and run full API challenge (use after logout or to rotate session)
 
 Config subcommands:
   config show        Show current configuration
@@ -2329,6 +2365,7 @@ Examples:
   traderclaw setup --api-key oc_xxx --url https://api.traderclaw.ai
   traderclaw setup --gateway-base-url https://gateway.myhost.ts.net
   traderclaw login
+  traderclaw login --force-reauth --wallet-private-key <base58_key>
   traderclaw logout
   traderclaw status
   traderclaw config show

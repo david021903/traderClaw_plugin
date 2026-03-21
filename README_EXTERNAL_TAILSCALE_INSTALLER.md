@@ -151,6 +151,8 @@ Requirements:
 - never print in telemetry/crash logs
 - allow copy action with masked preview
 
+**`TRADERCLAW_WALLET_PRIVATE_KEY` and the OpenClaw gateway:** External installers must document that this variable must be available to the **same process** that runs the gateway (e.g. systemd `EnvironmentFile`), not only in the user’s SSH session. Otherwise session refresh failures inside the gateway cannot complete wallet proof and **all** trading tools fail in Telegram/chat. Canonical user doc: [Installation troubleshooting](https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out).
+
 Gateway token source:
 - `~/.openclaw/openclaw.json` -> `gateway.auth.token`
 

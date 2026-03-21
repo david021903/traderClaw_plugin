@@ -41,6 +41,13 @@ https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-aut
 
 After the link, you may add **one short** pointer (e.g. `traderclaw status` on the host) — **not** a substitute for the doc.
 
+### Wallet proof vs signup — do not conflate these
+
+- **Wallet proof** is **not** account signup. It is a cryptographic step the **orchestrator** may require when an API key is already tied to a **trading wallet**. The user proves they control that wallet (local signing). **Never** tell the user to “sign up again” to fix wallet proof.
+- **`traderclaw login`** (current CLI) **reuses the saved refresh token** when it is still valid, so a healthy host often **does not** need the private key on every login. If refresh failed or the user ran **`traderclaw logout`**, a **full challenge** may run and then wallet proof can be required — use `--wallet-private-key` or env, **or** configure the key for the **gateway process** (below).
+- **OpenClaw gateway ≠ your SSH shell.** Exporting `TRADERCLAW_WALLET_PRIVATE_KEY` only in an interactive SSH session **does not** inject it into **systemd** (or whatever runs `openclaw gateway`). The plugin inside the gateway must see that variable when refresh fails and a challenge runs — otherwise **every** tool fails and the agent looks “broken.” Direct users to the official doc for **service-level** env configuration.
+- **Plugin id vs npm name:** OpenClaw may warn that the npm package is `solana-traderclaw-v1` while the plugin id is `solana-trader`. That is **expected**; config keys should stay under `plugins.entries.solana-trader`. It is not the cause of wallet proof failures.
+
 ### When trading tools fail: session, logout, or missing API key
 
 If `solana_system_status`, the startup gate, or other tools report auth or session errors:

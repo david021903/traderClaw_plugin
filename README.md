@@ -149,7 +149,13 @@ Available config keys: `orchestratorUrl`, `walletId`, `apiKey`, `apiTimeout`, `r
 
 Wallet proof note: if login/session challenge requires wallet ownership proof, provide the key at runtime with `--wallet-private-key` or `TRADERCLAW_WALLET_PRIVATE_KEY`. It is used for local signing only and is not stored in `~/.openclaw/openclaw.json`.
 
+**Gateway process:** Telegram and other channels talk to the **OpenClaw gateway** process. That process must be able to read `TRADERCLAW_WALLET_PRIVATE_KEY` when the session refresh fails and a new challenge runs. Exporting the variable only in your SSH session does **not** set it for **systemd** (or Docker, etc.). Configure it in the gateway unit’s environment per the troubleshooting guide below.
+
+**`traderclaw login`:** Uses the saved refresh token when valid (no wallet key needed). Use `traderclaw login --force-reauth` when you intentionally want a full API challenge (e.g. after `traderclaw logout`).
+
 **Session / auth / startup issues:** follow the official guide — [Installation → Troubleshooting (session expired, auth, logged out)](https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out).
+
+**Config noise:** OpenClaw may warn about npm package name `solana-traderclaw-v1` vs plugin id `solana-trader`. That mismatch is expected; keep `plugins.entries.solana-trader` as documented.
 
 ### `traderclaw --help`
 
