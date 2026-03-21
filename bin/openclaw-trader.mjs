@@ -7,6 +7,7 @@ import { homedir } from "os";
 import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
 import { execSync } from "child_process";
 import { createServer } from "http";
+import { sortModelsByPreference } from "./llm-model-preference.mjs";
 
 const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')).version;
 const PLUGIN_ID = "solana-trader";
@@ -1437,7 +1438,7 @@ function loadWizardLlmCatalog() {
     providers: [
       {
         id: "anthropic",
-        models: [{ id: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6" }],
+        models: [{ id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6 (recommended default)" }],
       },
       {
         id: "openai",
@@ -1474,10 +1475,16 @@ function loadWizardLlmCatalog() {
 
     const providers = [...providerMap.keys()]
       .sort((a, b) => a.localeCompare(b))
-      .map((id) => ({
-        id,
-        models: (providerMap.get(id) || []).sort((a, b) => a.id.localeCompare(b.id)),
-      }))
+      .map((id) => {
+        const rawModels = providerMap.get(id) || [];
+        const sortedIds = sortModelsByPreference(
+          id,
+          rawModels.map((m) => m.id),
+        );
+        const byId = new Map(rawModels.map((m) => [m.id, m]));
+        const models = sortedIds.map((mid) => byId.get(mid)).filter(Boolean);
+        return { id, models };
+      })
       .filter((entry) => supportedProviders.has(entry.id))
       .filter((entry) => entry.models.length > 0);
 
