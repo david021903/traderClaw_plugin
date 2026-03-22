@@ -8,6 +8,7 @@ import { parseXConfig, registerXReadTools } from "./lib/x-tools.mjs";
 import { registerWebFetchTool } from "./lib/web-fetch.mjs";
 import * as fs from "fs";
 import * as path from "path";
+import { homedir } from "os";
 
 interface XConfig {
   ok: boolean;
@@ -155,6 +156,11 @@ const solanaTraderPlugin = {
       return;
     }
 
+    api.logger.info(
+      `[solana-trader] Session config: refreshToken=${config.refreshToken ? "present (" + config.refreshToken.slice(0, 8) + "...)" : "MISSING"}, ` +
+      `apiKey=${apiKey ? "present" : "MISSING"}, walletPublicKey=${config.walletPublicKey ? "present" : "MISSING"}`,
+    );
+
     const sessionManager = new SessionManager({
       baseUrl: orchestratorUrl,
       apiKey: apiKey || "",
@@ -167,10 +173,23 @@ const solanaTraderPlugin = {
       clientLabel: "openclaw-plugin-runtime",
       timeout: apiTimeout,
       onTokensRotated: (tokens) => {
-        api.logger.info(
-          `[solana-trader] Session tokens rotated. New refreshToken: ${tokens.refreshToken.slice(0, 8)}... ` +
-          `Update config with: traderclaw config set refreshToken ${tokens.refreshToken}`
-        );
+        const configPath = path.join(homedir(), ".openclaw", "openclaw.json");
+        try {
+          const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+          const entry = raw?.plugins?.entries?.["solana-trader"];
+          if (entry?.config) {
+            entry.config.refreshToken = tokens.refreshToken;
+            if (tokens.walletPublicKey) entry.config.walletPublicKey = tokens.walletPublicKey;
+            fs.writeFileSync(configPath, JSON.stringify(raw, null, 2) + "\n", "utf-8");
+            api.logger.info(`[solana-trader] Persisted rotated refreshToken to ${configPath}`);
+          } else {
+            api.logger.warn("[solana-trader] Could not persist refreshToken — plugin config entry not found in openclaw.json");
+          }
+        } catch (err: unknown) {
+          api.logger.warn(
+            `[solana-trader] Failed to persist rotated refreshToken: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       },
       logger: {
         info: (msg) => api.logger.info(`[solana-trader] ${msg}`),
