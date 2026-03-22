@@ -794,6 +794,28 @@ async function cmdSetup(args) {
   const existingConfig = readConfig();
   removeLegacyWalletPrivateKey(pluginConfig);
   setPluginConfig(existingConfig, pluginConfig);
+
+  if (!existingConfig.agents || typeof existingConfig.agents !== "object") {
+    existingConfig.agents = {};
+  }
+  if (!existingConfig.agents.defaults) existingConfig.agents.defaults = {};
+  if (!existingConfig.agents.defaults.heartbeat || typeof existingConfig.agents.defaults.heartbeat !== "object") {
+    existingConfig.agents.defaults.heartbeat = {};
+  }
+  if (!Array.isArray(existingConfig.agents.list)) {
+    existingConfig.agents.list = [];
+  }
+  const hasMainAgent = existingConfig.agents.list.some((a) => a && a.id === "main");
+  if (!hasMainAgent) {
+    existingConfig.agents.list.push({ id: "main", default: true, heartbeat: { every: "5m", target: "last" } });
+  } else {
+    const mainAgent = existingConfig.agents.list.find((a) => a.id === "main");
+    if (!mainAgent.heartbeat) mainAgent.heartbeat = { every: "5m", target: "last" };
+  }
+  if (!existingConfig.cron || typeof existingConfig.cron !== "object") {
+    existingConfig.cron = { enabled: true, maxConcurrentRuns: 2, sessionRetention: "24h" };
+  }
+
   writeConfig(existingConfig);
 
   printSuccess(`  Config written to ${CONFIG_FILE}`);
