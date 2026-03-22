@@ -576,10 +576,14 @@ async function cmdSetup(args) {
     if (showApiKey) {
       printInfo("  (--show-api-key: full key is already shown above.)");
     }
-    const ack = await prompt("Type API_KEY_STORED to confirm you saved this key", "");
-    if (ack !== "API_KEY_STORED") {
-      printError("Confirmation not provided. Aborting setup so you do not lose access to your API key.");
-      process.exit(1);
+    for (let attempt = 0; ; attempt++) {
+      const ack = await prompt("Type API_KEY_STORED to confirm you saved this key", "");
+      if (ack === "API_KEY_STORED") break;
+      if (attempt >= 2) {
+        printError("Confirmation not provided after 3 attempts. Aborting setup so you do not lose access to your API key.");
+        process.exit(1);
+      }
+      printWarn("  Please type exactly: API_KEY_STORED");
     }
     printSuccess("  API key backup confirmation received.");
   }
@@ -744,10 +748,14 @@ async function cmdSetup(args) {
     }
 
     if (lastSeenWalletPrivateKey) {
-      const ack = await prompt("Type BACKED_UP to continue", "");
-      if (ack !== "BACKED_UP") {
-        printError("Backup confirmation not provided. Aborting setup to prevent key loss.");
-        process.exit(1);
+      for (let attempt = 0; ; attempt++) {
+        const ack = await prompt("Type BACKED_UP to continue", "");
+        if (ack === "BACKED_UP") break;
+        if (attempt >= 2) {
+          printError("Backup confirmation not provided after 3 attempts. Aborting setup to prevent key loss.");
+          process.exit(1);
+        }
+        printWarn("  Please type exactly: BACKED_UP");
       }
       printSuccess("  Backup confirmation received.");
     }
