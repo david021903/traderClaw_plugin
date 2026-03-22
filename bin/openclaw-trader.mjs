@@ -551,16 +551,29 @@ async function cmdSetup(args) {
       externalUserId = await prompt("External User ID (or press enter for auto-generated)", `agent_${randomUUID().slice(0, 8)}`);
     }
 
-    try {
-      const signupResult = await doSignup(orchestratorUrl, externalUserId);
-      apiKey = signupResult.apiKey;
-      signedUpThisSession = true;
-      printSuccess(`  Signup successful!`);
-      printInfo(`  Tier: ${signupResult.tier}`);
-      printInfo(`  Scopes: ${signupResult.scopes.join(", ")}`);
-    } catch (err) {
-      printError(`Signup failed: ${err.message}`);
-      process.exit(1);
+    for (let signupAttempt = 0; ; signupAttempt++) {
+      try {
+        const signupResult = await doSignup(orchestratorUrl, externalUserId);
+        apiKey = signupResult.apiKey;
+        signedUpThisSession = true;
+        printSuccess(`  Signup successful!`);
+        printInfo(`  Tier: ${signupResult.tier}`);
+        printInfo(`  Scopes: ${signupResult.scopes.join(", ")}`);
+        break;
+      } catch (err) {
+        const msg = err.message || String(err);
+        if (msg.includes("SIGNUP_ALREADY_COMPLETED") || msg.includes("409")) {
+          printWarn(`  User "${externalUserId}" is already registered.`);
+          if (signupAttempt >= 2) {
+            printError("  Too many attempts. If you already have an account, re-run setup and choose 'y' when asked for an API key.");
+            process.exit(1);
+          }
+          externalUserId = await prompt("Try a different User ID", `agent_${randomUUID().slice(0, 8)}`);
+        } else {
+          printError(`Signup failed: ${msg}`);
+          process.exit(1);
+        }
+      }
     }
   }
 
