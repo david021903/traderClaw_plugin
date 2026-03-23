@@ -500,13 +500,16 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
 
   const isV2 = modeConfig.pluginId === "solana-trader-v2";
 
+  const heartbeatPrompt =
+    "Read HEARTBEAT.md (workspace context). Follow it strictly — execute the full trading cycle and report results to the user. Do NOT reply HEARTBEAT_OK. Always produce a visible summary of what you checked and did.";
+
   const v1Agents = [
-    { id: "main", default: true, heartbeat: { every: "5m", target: "last" } }
+    { id: "main", default: true, heartbeat: { every: "5m", target: "last", prompt: heartbeatPrompt } }
   ];
   const v2Agents = [
-    { id: "cto", default: true, heartbeat: { every: "5m", target: "last" } },
-    { id: "execution-specialist", heartbeat: { every: "3m", target: "last" } },
-    { id: "alpha-signal-analyst", heartbeat: { every: "5m", target: "last" } },
+    { id: "cto", default: true, heartbeat: { every: "5m", target: "last", prompt: heartbeatPrompt } },
+    { id: "execution-specialist", heartbeat: { every: "3m", target: "last", prompt: heartbeatPrompt } },
+    { id: "alpha-signal-analyst", heartbeat: { every: "5m", target: "last", prompt: heartbeatPrompt } },
     { id: "onchain-analyst" },
     { id: "social-analyst" },
     { id: "smart-money-tracker" },

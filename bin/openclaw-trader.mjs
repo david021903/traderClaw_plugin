@@ -805,12 +805,15 @@ async function cmdSetup(args) {
   if (!Array.isArray(existingConfig.agents.list)) {
     existingConfig.agents.list = [];
   }
+  const heartbeatPrompt =
+    "Read HEARTBEAT.md (workspace context). Follow it strictly — execute the full trading cycle and report results to the user. Do NOT reply HEARTBEAT_OK. Always produce a visible summary of what you checked and did.";
   const hasMainAgent = existingConfig.agents.list.some((a) => a && a.id === "main");
   if (!hasMainAgent) {
-    existingConfig.agents.list.push({ id: "main", default: true, heartbeat: { every: "5m", target: "last" } });
+    existingConfig.agents.list.push({ id: "main", default: true, heartbeat: { every: "5m", target: "last", prompt: heartbeatPrompt } });
   } else {
     const mainAgent = existingConfig.agents.list.find((a) => a.id === "main");
-    if (!mainAgent.heartbeat) mainAgent.heartbeat = { every: "5m", target: "last" };
+    if (!mainAgent.heartbeat) mainAgent.heartbeat = { every: "5m", target: "last", prompt: heartbeatPrompt };
+    else mainAgent.heartbeat.prompt = heartbeatPrompt;
   }
   if (!existingConfig.cron || typeof existingConfig.cron !== "object") {
     existingConfig.cron = { enabled: true, maxConcurrentRuns: 2, sessionRetention: "24h" };
@@ -1795,6 +1798,7 @@ function wizardHtml(defaults) {
       let announcedFunnelAdminUrl = "";
       let pollTimer = null;
       let pollIntervalMs = 1200;
+      let installLocked = false;
 
       function hasRequiredInputs() {
         return (
@@ -1806,7 +1810,19 @@ function wizardHtml(defaults) {
       }
 
       function updateStartButtonState() {
-        startBtn.disabled = !hasRequiredInputs();
+        if (installLocked) {
+          startBtn.disabled = true;
+          startBtn.setAttribute("aria-busy", "true");
+          if (!llmCatalogLoading) {
+            startBtn.textContent = "Installation in progress…";
+          }
+          return;
+        }
+        startBtn.removeAttribute("aria-busy");
+        startBtn.disabled = llmCatalogLoading || !hasRequiredInputs();
+        if (!llmCatalogLoading) {
+          startBtn.textContent = "Start Installation";
+        }
       }
 
       function stopLlmLoadTicker() {
@@ -1841,7 +1857,6 @@ function wizardHtml(defaults) {
         }
         stopLlmLoadTicker();
         llmLoadingHintEl.classList.add("hidden");
-        startBtn.textContent = "Start Installation";
         llmLoadStartedAt = 0;
         llmModelEl.disabled = !llmModelManualEl.checked;
         updateStartButtonState();
@@ -1968,6 +1983,9 @@ function wizardHtml(defaults) {
           return;
         }
 
+        installLocked = true;
+        updateStartButtonState();
+
         try {
           const res = await fetch("/api/start", {
             method: "POST",
@@ -1977,6 +1995,8 @@ function wizardHtml(defaults) {
           const data = await res.json().catch(() => ({}));
 
           if (!res.ok) {
+            installLocked = false;
+            updateStartButtonState();
             stateEl.textContent = "failed";
             manualEl.textContent = data.error ? "Failed to start: " + data.error : "Failed to start installation.";
             readyEl.textContent = "";
@@ -1988,6 +2008,8 @@ function wizardHtml(defaults) {
           announcedFunnelAdminUrl = "";
           await refresh();
         } catch (err) {
+          installLocked = false;
+          updateStartButtonState();
           stateEl.textContent = "failed";
           manualEl.textContent = "Failed to start installation: " + (err && err.message ? err.message : String(err));
           readyEl.textContent = "";
@@ -2005,6 +2027,8 @@ function wizardHtml(defaults) {
         const res = await fetch("/api/state");
         const data = await res.json();
         stateEl.textContent = data.status || "idle";
+        const st = data.status || "idle";
+        installLocked = st === "running" || st === "completed";
 
         const steps = data.stepResults || [];
         const stepDone = (id) => steps.some((r) => r.stepId === id && r.status === "completed");
@@ -2104,6 +2128,7 @@ function wizardHtml(defaults) {
           stepsEl.appendChild(tr);
         });
         logsEl.textContent = (data.logs || []).map((l) => "[" + l.at + "] " + l.stepId + " " + l.level + " " + l.text).join("\\n");
+        updateStartButtonState();
       }
 
       async function finishWizardServer() {
