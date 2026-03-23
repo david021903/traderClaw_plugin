@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
+import { getLinuxGatewayPersistenceSnapshot } from "./gateway-persistence-linux.mjs";
 
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
@@ -817,6 +818,17 @@ function verifyInstallation(modeConfig, apiKey) {
   } catch {
   }
 
+  const persistSnap = getLinuxGatewayPersistenceSnapshot();
+  let persistOk = true;
+  let persistNote = "not Linux / WSL or loginctl unavailable";
+  if (persistSnap.eligible) {
+    persistOk = persistSnap.linger === true;
+    persistNote =
+      persistSnap.linger === true
+        ? "linger enabled"
+        : "run: traderclaw gateway ensure-persistent (or sudo loginctl enable-linger $USER)";
+  }
+
   return [
     { label: "OpenClaw platform", ok: commandExists("openclaw"), note: "not in PATH" },
     { label: `Trading CLI (${modeConfig.cliName})`, ok: commandExists(modeConfig.cliName), note: "not in PATH" },
@@ -827,6 +839,11 @@ function verifyInstallation(modeConfig, apiKey) {
     { label: "Heartbeat scheduling", ok: heartbeatConfigured, note: "agent will not wake autonomously" },
     { label: "Cron jobs configured", ok: cronConfigured, note: "scheduled maintenance jobs missing" },
     { label: "API key configured", ok: !!apiKey, note: "needs setup" },
+    {
+      label: "Gateway survives SSH (systemd linger)",
+      ok: !persistSnap.eligible || persistOk,
+      note: persistNote,
+    },
   ];
 }
 
@@ -1228,6 +1245,16 @@ export class InstallerStepEngine {
             }
             throw err;
           }
+        });
+      }
+
+      if (!this.options.skipGatewayBootstrap) {
+        await this.runStep("gateway_persistence", "SSH-safe gateway (systemd user linger)", async () => {
+          const { ensureLinuxGatewayPersistence } = await import("./gateway-persistence-linux.mjs");
+          return ensureLinuxGatewayPersistence({
+            emitLog: (level, text) => this.emitLog("gateway_persistence", level, text),
+            runPrivileged: (cmd, args) => this.runWithPrivilegeGuidance("gateway_persistence", cmd, args),
+          });
         });
       }
 
