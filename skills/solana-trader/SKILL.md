@@ -328,6 +328,8 @@ There is no context loss from this separation. Cron outputs flow into the persis
 ```
 1. WAKE UP — heartbeat timer, discovery event, or alpha webhook
        ↓
+1.5. Step -1: MEMORY CONTEXT LOAD — read MEMORY.md, check daily log, search server-side memory
+       ↓
 2. Step 0: INTERRUPT CHECK — identify wake-up trigger, check kill switch, check dead money, STRATEGY INTEGRITY CHECK
        ↓
 3. Step 1: SCAN — call solana_scan for broad discovery, process Bitquery subscriptions
@@ -352,7 +354,9 @@ There is no context loss from this separation. Cron outputs flow into the persis
        ↓
 13. Step 8.5: STRUCTURED LEARNING LOG — decision-level learning entries (on errors/misses/surprises)
        ↓
-14. SLEEP — wait for next heartbeat or event-driven wake-up
+14. USER COMMUNICATION — report cycle summary to user (never silent)
+       ↓
+15. SLEEP — wait for next heartbeat or event-driven wake-up
 ```
 
 ---
@@ -365,7 +369,7 @@ You are asleep until something wakes you. There are four wake-up paths, and each
 
 | Wake-Up Trigger | What Happened | Your Path |
 |---|---|---|
-| **Scheduled heartbeat** (every ~5 min) | Timer fired, normal cycle | Run fast loop: Step 0 → Step 1 (SCAN) → Step 1.5 → Step 1.75 → Step 2 → ... → Step 7 |
+| **Scheduled heartbeat** (every ~5 min) | Timer fired, normal cycle | Run fast loop: Step -1 (MEMORY LOAD) → Step 0 → Step 1 (SCAN) → Step 1.5 → Step 1.75 → Step 2 → ... → Step 7 → Report to user |
 | **Discovery subscription event** | Orchestrator matched a token from your Bitquery subscription (e.g., new Pump.fun launch, LP change) | Step 0 → **skip Step 1/1.5/1.75** → go directly to Step 2 (ANALYZE) on the matched token |
 | **Alpha signal webhook** | SpyFly aggregator pushed a high-priority alpha call | Step 0 → **skip Step 1/1.5/1.75** → go directly to Step 2 (ANALYZE) on the signaled token |
 | **`CRON_JOB:` message** | Gateway cron scheduler fired a slow-loop job | **Skip the entire trading loop.** Execute ONLY the specified cron job, persist outputs, complete the turn. See "Cron Jobs (Slow Loop)" section below. |
@@ -375,10 +379,12 @@ You are asleep until something wakes you. There are four wake-up paths, and each
 If the incoming message starts with `CRON_JOB:`, you are in a **cron session**. Do NOT run the trading loop. Do NOT run Step 0 interrupt checks. Execute only the specified job:
 
 1. Parse the job ID from the message (e.g., `CRON_JOB: strategy_evolution` → job is `strategy_evolution`)
-2. Look up the job in the "Cron Jobs (Slow Loop)" section below
-3. Execute that job's tools and produce its outputs
-4. Persist results (strategy state updates, memory entries)
-5. Complete the turn — do nothing else
+2. Load memory context (see "Memory Context Load" in Cron Jobs section below)
+3. Look up the job in the "Cron Jobs (Slow Loop)" section below
+4. Execute that job's tools and produce its outputs
+5. Persist results (strategy state updates, memory entries)
+6. Report results to user (see each job's "Report to user" section)
+7. Complete the turn — do nothing else
 
 Recognized cron job IDs: `strategy_evolution`, `daily_performance_report`, `source_reputation_recalc`, `dead_money_sweep`, `subscription_cleanup`, `meta_rotation_analysis`
 
@@ -389,6 +395,23 @@ If you receive a `CRON_JOB:` message with an unrecognized job ID, log a warning 
 When woken by a heartbeat, discovery subscription, or alpha signal, you already know your path from the table above. Discovery and alpha wake-ups give you a specific candidate — skip scanning, go straight to analysis. But ALWAYS run the interrupt check first regardless of wake-up path. You need to know your portfolio state before making any decisions.
 
 **Self-signal filtering:** If you were woken by an alpha signal for a token you already hold or recently traded (within 24 hours), this is likely your own trade echoing back through the alpha stream. The OpenClaw API emits a `ca_drop` signal on every filled trade. Check `solana_positions` and `solana_trades` — if the token is already in your portfolio, discard the signal for discovery purposes. It is NOT independent confirmation.
+
+### Step -1: MEMORY CONTEXT LOAD (mandatory, every non-cron cycle)
+
+Before any trading action, load context from all 3 memory layers:
+
+1. **Layer 1 — MEMORY.md** (auto-loaded): Confirm your durable state is present — tier, wallet, mode, strategy version, watchlist, regime canary, permanent learnings. If MEMORY.md is empty, you have NOT completed startup — run the Mandatory Startup Sequence first.
+2. **Layer 2 — Daily log** (auto-loaded): Read today's `memory/YYYY-MM-DD.md` to know what scans, trades, and analysis already happened. Avoid repeating work done earlier this session.
+3. **Layer 3 — Server-side memory**: Call `solana_memory_search` for context before acting:
+   - `"source_reputation"` — which alpha sources to trust
+   - `"strategy_drift_warning"` — any recent drift alerts
+   - `"pre_trade_rationale"` — your last few trade decisions for integrity check
+   - `"meta_rotation"` — current hot vs cooling narratives
+   - For any specific token you're about to analyze: `solana_memory_by_token` to check past outcomes
+
+This ensures every cycle starts with full context, not a blank slate. Only after loading context should you proceed to Step 0.
+
+---
 
 **Interrupt check (run on every non-cron wake-up):**
 
@@ -457,7 +480,7 @@ On every non-cron wake-up, if `solana_killswitch_status` returns active:
 
 ### Step 1: SCAN — Find Opportunities
 
-> **Pro Tier Required.** `solana_scan_launches`, `solana_scan_hot_pairs`, and `solana_market_regime` are Pro-tier endpoints. Starter agents cannot scan. If you receive a 403/tier error, call `solana_entitlement_current` to check your tier and `solana_entitlement_upgrade` to upgrade.
+> **All tiers can attempt these endpoints.** `solana_scan_launches`, `solana_scan_hot_pairs`, and `solana_market_regime` are available on all tiers with different rate limits. Always attempt the call — the server enforces access. If you receive a 403/tier error, report it in your output and proceed with available data (alpha signals, thesis package). Do not pre-filter or skip tools based on perceived tier.
 
 Call:
 - `solana_scan_launches` — new token launches (Pump.fun, Raydium, PumpSwap)
@@ -862,7 +885,7 @@ When `solana_firehose_config` and `solana_firehose_status` tools become availabl
 
 ### Step 2: ANALYZE — Deep Dive
 
-> **Pro Tier Required.** `solana_token_*` endpoints are Pro-tier. Starter agents have no access to token analysis. If you're on Starter, skip to Step 3 using data from the thesis package only, or upgrade via `solana_entitlement_upgrade`.
+> **All tiers can attempt these endpoints.** `solana_token_*` endpoints are available on all tiers with different rate limits. Always attempt the call — the server enforces access. If you receive a 403/tier error, report it in your output and fall back to thesis package data for Step 3. Do not pre-filter or skip tools based on perceived tier.
 
 For each interesting token from scan:
 
@@ -923,6 +946,32 @@ This is a high-value enrichment step. Most rugs come from repeat deployers. A de
 - Large sells causing cascading price drops = weak demand. Exit or avoid.
 
 **DEGEN mode**: Emphasis on momentum + flow over fundamentals. Tolerates more noise but still rejects hard-risk setups (mint authority, freeze authority, no LP).
+
+**Social & Community Enrichment (after on-chain analysis):**
+
+After completing on-chain analysis above, enrich each promising candidate with social intelligence. This is a **confidence modifier** — it supplements on-chain analysis, never replaces it. Maximum social adjustment: ±0.10.
+
+> **If X credentials are not configured**, the X read tools (`x_search_tweets`, `x_read_mentions`, `x_get_thread`) will return errors. In that case, skip social enrichment entirely — rely on on-chain data and alpha signals alone. Social intel is supplementary, not required. Set any social confidence adjustment to 0.
+
+**For each candidate that passed initial on-chain screening:**
+
+1. **Check 48-hour cache first** — scan today's daily log and call `solana_memory_search` / `solana_memory_by_token` for this token. If you already analyzed its socials within 48 hours, reuse the cached result. Do not re-fetch.
+
+2. **Resolve token social links via Bitquery** — call `solana_bitquery_catalog` with `pumpFunMetadata.tokenMetadataByAddress` to get the metadata URI. Fetch the URI JSON for `twitter`, `telegram`, and `website` fields. See "Resolving Token Social Links" in the Social Intelligence section below for full details.
+
+3. **Smart link parsing** — determine if the `twitter` field is a profile link, community link, hashtag, or raw handle. Each type requires a different search strategy. See "Smart Link Parsing" in the Social Intelligence section below.
+
+4. **Community analysis** — if a Twitter handle or community was resolved:
+   ```
+   x_search_tweets({ query: "$SYMBOL OR @TokenHandle" })
+   ```
+   Assess: mention velocity, engagement quality, author credibility, unique vs repeat authors, bot signals. See "Token Community Analysis" in the Social Intelligence section below.
+
+5. **Website legitimacy check** — if metadata contains a `website` field, use `web_fetch_url` to analyze it. Check content depth, social link consistency, and outbound links. See "Website Legitimacy Analysis" in the Social Intelligence section below.
+
+6. **Apply confidence modifiers** — adjust composite confidence based on social findings (strong community: +0.03 to +0.05, weak/fake: -0.05, no presence: -0.02, etc.). See "Social Signals as Confidence Modifiers" table in the Social Intelligence section below.
+
+7. **Log results** — write social research findings to memory via `solana_memory_write` with appropriate tags (`website_analyzed`, `community_analyzed`, `twitter_profile_analyzed`) and to `solana_decision_log` with type `analysis`.
 
 ---
 
@@ -1138,7 +1187,7 @@ ALPHA SOURCE (if applicable):
 
 **For sells:** A shorter rationale is acceptable — tag with `pre_exit_rationale`:
 ```
-Token: <symbol> | Side: sell | Size: <sizeSol>
+Token: <symbol> | Side: sell | Size: <sellPct>% of position (or <sizeTokens> tokens)
 EXIT REASON: <stop-loss hit / take-profit / flow reversal / dead money / defense mode / manual>
 CURRENT PnL: <X% / X SOL>
 HELD FOR: <duration>
@@ -1149,7 +1198,9 @@ HELD FOR: <duration>
 ### Step 6: EXECUTE — Place the Trade
 
 Call `solana_trade_execute` with:
-- `tokenAddress`, `side` ("buy" or "sell"), `sizeSol`, `symbol`
+- `tokenAddress`, `side` ("buy" or "sell"), `symbol`
+- **For buy:** `sizeSol` (amount in SOL to spend) — required
+- **For sell:** `sellPct` (percentage of position to sell, 1–100 where 100 = full exit) **or** `sizeTokens` (exact token count) — one is required. If both sent, `sellPct` wins. Do NOT send `sizeSol` for sells.
 - `slippageBps` (scaled to liquidity as defined in your exit plan — hard cap 800bps)
 - `slPct`, `tpLevels`, `trailingStopPct`
 - `managementMode`
@@ -1201,6 +1252,21 @@ HARDENED-specific monitoring:
 - Don't exit on minor pullbacks within a strong trend
 - Re-evaluate thesis if position is flat for extended period
 
+**Social exhaustion check (if X credentials are configured):**
+
+While holding a position, periodically check if social buzz has peaked. This is an early exit signal that often precedes price decline:
+
+```
+x_search_tweets({ query: "$SYMBOL", maxResults: 50 })
+```
+
+Compare current mention velocity against your previous check (stored in daily log or memory):
+- Mention velocity declining + price flatting/dropping → social exhaustion. Consider exit.
+- Mention velocity accelerating + price rising → still has momentum.
+- Maximum Twitter buzz on a token is more often a **sell signal** than a buy signal.
+
+If X credentials are not configured, skip this check. It is supplementary — on-chain flow data and price action remain your primary exit signals.
+
 **SERVER_MANAGED positions — the server handles SL/TP:**
 - Do NOT manually exit
 - Query positions to see server strategy progress
@@ -1210,6 +1276,22 @@ HARDENED-specific monitoring:
 - Reduce aggression for future trades
 - Journal the denial reason
 - Do NOT attempt to circumvent
+
+---
+
+### User Communication (mandatory, end of every non-cron cycle)
+
+After completing your trading cycle (Steps -1 through 7), send a brief summary to the user. Never run a silent cycle. Always communicate what you did, even if no trades were made.
+
+**Summary should include:**
+- What you scanned and how many candidates were found
+- Any alpha signals processed and their scores
+- Trades executed (entries/exits) with token, size, and rationale
+- Open position status (current PnL, any SL/TP approaching)
+- If nothing qualified for a trade, say what you checked and why nothing passed
+- Any notable observations (regime shift, meta rotation, defense mode trigger)
+
+Keep it concise — 3-5 sentences for a quiet cycle, more detail if trades were made.
 
 ---
 
@@ -1598,6 +1680,11 @@ Cron jobs run in **isolated sessions** separate from the trading loop. Each job 
 
 When you receive a `CRON_JOB:` message, execute ONLY the specified job below. Do not run the trading loop.
 
+**Memory Context Load (mandatory for every cron job):** Before executing any cron job logic, load context from all 3 memory layers:
+1. **Layer 1 — MEMORY.md** (auto-loaded): Read your durable state — tier, wallet, mode, strategy version.
+2. **Layer 2 — Daily log** (auto-loaded): Check today's log for recent activity and prior cron runs.
+3. **Layer 3 — Server-side memory**: Call `solana_memory_search` for context specific to this job (see each job's tools section for what to search). This ensures cron jobs build on prior knowledge, not start from scratch.
+
 **Idempotency rule:** At the start of every cron job, check whether sufficient new data exists since the last run. If not, exit early — do not produce empty or redundant outputs.
 
 ---
@@ -1620,6 +1707,11 @@ When you receive a `CRON_JOB:` message, execute ONLY the specified job below. Do
 5. `solana_strategy_update` — write new weights with incremented version
 6. `solana_memory_write` — log evolution reasoning, pattern detection results, VFM scorecards, named patterns
 
+**Context retrieval (mandatory first step):** Before computing anything, search memory for prior evolution context:
+- `solana_memory_search` with query `"strategy_evolution"` — find last 3 evolution cycle results, reasoning, and VFM scorecards
+- `solana_memory_search` with query `"strategy_drift_warning"` — find any drift warnings since last evolution
+- `solana_memory_search` with query `"pre_trade_rationale"` — recent trade decision patterns to analyze
+
 **Execution order (all sub-steps defined in Step 9 above):**
 1. **Recurring Pattern Detection** — search for linked learning entries, identify chains, investigate drift warnings
 2. **ADL checks** — apply anti-drift rules, check weight velocity, reversion check
@@ -1636,6 +1728,8 @@ When you receive a `CRON_JOB:` message, execute ONLY the specified job below. Do
 
 **Outputs:** Updated feature weights in strategy state, pattern detection results, VFM scorecard, named pattern updates, evolution reasoning — all in memory. Resolved learning entries where applicable.
 
+**Report to user:** After completing the evolution cycle, send a brief summary: what weights changed (if any), key patterns detected, and whether the strategy is trending toward HARDENED or DEGEN behavior.
+
 ---
 
 ### Job: `daily_performance_report`
@@ -1646,14 +1740,21 @@ When you receive a `CRON_JOB:` message, execute ONLY the specified job below. Do
 
 **Gating condition:** Only produce a report if there was any trading activity (entries, exits, or position changes) in the past 24 hours. Check via `solana_journal_summary`. If no activity, log "daily_report: skipped, no trading activity" and exit.
 
+**Context retrieval (mandatory first step):** Before generating the report, search memory for prior reports to compare trends:
+- `solana_memory_search` with query `"daily_report"` — find yesterday's report for comparison (PnL trend, win rate trend)
+- `solana_memory_search` with query `"strategy_evolution"` — find the most recent strategy evolution cycle for context
+
 **Tools:**
 1. `solana_journal_summary` — aggregate stats over the past 24 hours
 2. `solana_positions` — current portfolio state
 3. `solana_capital_status` — capital usage and daily limits
 4. `solana_trades` — detailed trade history for the day
-5. `solana_memory_write` — write the report with tag `daily_report`
+5. `solana_memory_search` — retrieve previous daily reports for trend comparison
+6. `solana_memory_write` — write the report with tag `daily_report`
 
-**Outputs:** Memory entry containing: daily PnL (SOL), win/loss count, win rate, best/worst trades, average hold time, capital utilization, market regime summary, lessons learned, and any notable patterns.
+**Outputs:** Memory entry containing: daily PnL (SOL), win/loss count, win rate, best/worst trades, average hold time, capital utilization, market regime summary, lessons learned, and any notable patterns. Include comparison to previous day's performance where data exists.
+
+**Report to user:** Send the daily report summary to the user — PnL, win rate, best/worst trades, and key takeaways.
 
 ---
 
@@ -1744,6 +1845,8 @@ During Step 1.5b (ALPHA SIGNAL INTAKE) or when processing alpha webhook wake-ups
 
 **Outputs:** Memory entries with per-source reputation scores (win rate, avg PnL, signal count, conversion rate, trend direction). Recalc summary with timestamp. The fast loop reads these entries to apply reputation-adjusted confidence on incoming alpha signals.
 
+**Report to user:** Send a brief summary of reputation changes — which sources improved or declined, and any new sources that were added to tracking.
+
 ---
 
 ### Job: `dead_money_sweep`
@@ -1754,13 +1857,18 @@ During Step 1.5b (ALPHA SIGNAL INTAKE) or when processing alpha webhook wake-ups
 
 **Gating condition:** Always runs — check all open positions. If no positions are open, exit immediately.
 
+**Context retrieval (mandatory first step):** Before sweeping, check memory for context:
+- `solana_memory_search` with query `"dead_money_sweep"` — find last sweep results to compare (were any positions already flagged?)
+- `solana_memory_search` with query `"dead_money"` — find past dead money exits to track recurring patterns
+
 **Tools:**
 1. `solana_strategy_state` — read current mode (HARDENED/DEGEN) to determine dead money cutoff
 2. `solana_positions` — get all open positions with entry times and current PnL
 3. `solana_token_snapshot` — check current price action for flat positions
 4. `solana_trade_execute` — exit dead positions (sell)
 5. `solana_trade_review` — tag exits with `dead_money` outcome
-6. `solana_memory_write` — log sweep results with tag `dead_money_sweep`
+6. `solana_memory_search` — retrieve past sweep results and dead money patterns
+7. `solana_memory_write` — log sweep results with tag `dead_money_sweep`
 
 **Dead money criteria:**
 - LOCAL_MANAGED position that hasn't moved ±5% in the mode's cutoff (6h HARDENED, 3h DEGEN)
@@ -1768,6 +1876,8 @@ During Step 1.5b (ALPHA SIGNAL INTAKE) or when processing alpha webhook wake-ups
 - Do NOT exit SERVER_MANAGED positions — the server handles those
 
 **Outputs:** Dead positions exited, trade reviews tagged, sweep summary in memory.
+
+**Report to user:** If any dead positions were exited, send a summary: which tokens, how long they were held, and the PnL on exit.
 
 ---
 
@@ -1779,12 +1889,16 @@ During Step 1.5b (ALPHA SIGNAL INTAKE) or when processing alpha webhook wake-ups
 
 **Gating condition:** Always runs — subscription hygiene is always relevant.
 
+**Context retrieval (mandatory first step):** Before auditing subscriptions, check memory:
+- `solana_memory_search` with query `"subscription_cleanup"` — find last cleanup results (what was freed, what was renewed)
+
 **Tools:**
 1. `solana_bitquery_subscriptions` — list all active subscriptions (includes TTL/expiry status)
 2. `solana_positions` — check which tokens are still held (monitoring subs for sold tokens can be removed)
 3. `solana_bitquery_unsubscribe` — remove unneeded subscriptions
 4. `solana_bitquery_subscription_reopen` — renew expiring/expired subscriptions
-5. `solana_memory_write` — log cleanup actions with tag `subscription_cleanup`
+5. `solana_memory_search` — retrieve past cleanup history
+6. `solana_memory_write` — log cleanup actions with tag `subscription_cleanup`
 
 **24h subscription lifecycle:**
 
@@ -1809,6 +1923,8 @@ During this cron job:
 
 **Outputs:** Freed subscription slots, renewed subscriptions, cleanup log in memory.
 
+**Report to user:** If subscriptions were freed or renewed, send a brief summary: how many slots freed, how many renewed, and current utilization (e.g., "12/20 active").
+
 ---
 
 ### Job: `meta_rotation_analysis`
@@ -1819,13 +1935,19 @@ During this cron job:
 
 **Gating condition:** Only produces meaningful output if there has been scan or trade activity in the past 3-4 hours. Check via `solana_memory_search` for recent scan observations. If no activity, exit early.
 
+**Context retrieval (mandatory first step):** Before analyzing rotations, read prior observations:
+- `solana_memory_search` with query `"meta_rotation"` — find previous rotation observations to compare (which metas were hot vs cooling last time)
+- `solana_memory_search` with query `"signal_convergence"` — find recent convergence events for narrative clustering
+
 **Tools:**
-1. `solana_memory_search` — find recent scan results, trade entries, and previous meta observations
+1. `solana_memory_search` — find recent scan results, trade entries, previous meta observations, and convergence events
 2. `solana_trades` — identify which narrative categories recent trades fell into
 3. `solana_journal_summary` — check if certain trade tags correlate with narrative categories
 4. `solana_memory_write` — write meta rotation observations with tag `meta_rotation`
 
-**Outputs:** Memory entry containing: which metas are currently hot (high volume, positive momentum), which are cooling (declining interest), which are emerging (new narratives appearing), and trading implications. The fast loop reads these during scan filtering to prioritize or deprioritize narrative categories.
+**Outputs:** Memory entry containing: which metas are currently hot (high volume, positive momentum), which are cooling (declining interest), which are emerging (new narratives appearing), and trading implications. Include comparison to previous rotation analysis where data exists. The fast loop reads these during scan filtering to prioritize or deprioritize narrative categories.
+
+**Report to user:** Send a brief summary of current meta trends — what's hot, what's cooling, and any emerging narratives worth watching.
 
 ---
 
@@ -1957,8 +2079,8 @@ All authenticated endpoints use `Authorization: Bearer <accessToken>`.
 | `GET` | `/api/strategy/state` | `?walletId=<uuid>` | Current strategy weights and mode |
 | `POST` | `/api/strategy/update` | `walletId`, `featureWeights` | Update weights. Optional: `strategyVersion`, `mode` (HARDENED/DEGEN) |
 | `POST` | `/api/thesis/build` | `walletId`, `tokenAddress` | Build full thesis package |
-| `POST` | `/api/trade/precheck` | `walletId`, `tokenAddress`, `side` (buy/sell), `sizeSol`, `slippageBps` | Risk/policy check, no execution |
-| `POST` | `/api/trade/execute` | `walletId`, `tokenAddress`, `side`, `sizeSol`, `slippageBps` | Execute trade. Optional: `symbol`, `tpLevels[]`, `slPct`, `trailingStopPct`. Header: `x-idempotency-key` |
+| `POST` | `/api/trade/precheck` | `walletId`, `tokenAddress`, `side` (buy/sell), `slippageBps`. Buy: `sizeSol`. Sell: `sellPct` or `sizeTokens` | Risk/policy check, no execution |
+| `POST` | `/api/trade/execute` | `walletId`, `tokenAddress`, `side`, `slippageBps`. Buy: `sizeSol`. Sell: `sellPct` or `sizeTokens` | Execute trade. Optional: `symbol`, `tpLevels[]`, `slPct`, `trailingStopPct`. Header: `x-idempotency-key` |
 | `POST` | `/api/trade/review` | `walletId`, `outcome` (win/loss/neutral), `notes` | Post-trade review. Optional: `tradeId`, `tokenAddress`, `pnlSol`, `tags[]`, `strategyVersion` (strict semver). Status `201` |
 | `POST` | `/api/memory/write` | `walletId`, `notes` | Journal entry. Optional: `tokenAddress`, `outcome` (win/loss/neutral), `tags[]`, `strategyVersion` (strict semver). Status `201` |
 | `POST` | `/api/memory/search` | `walletId`, `query` | Search memory entries |
@@ -2015,7 +2137,7 @@ The API is segmented into three tiers. Your tier determines which endpoints you 
 | **Pro** | All Starter + scan, token analysis, Bitquery, market regime, entitlement upgrade |
 | **Enterprise** | All Pro + system status, elevated rate limits |
 
-Starter agents can trade but cannot scan or analyze tokens independently. They rely on external signals or the thesis package for market context. To unlock the full trading loop (Steps 1 + 2), upgrade to Pro.
+All tiers have access to all endpoints — the difference is rate limits, not access. Always attempt every tool call regardless of your tier. The server enforces gating; if a call returns 403, report it and proceed with available data. Do not pre-filter tools based on perceived tier.
 
 Use `solana_entitlement_costs` to see what each tier costs and unlocks. Use `solana_entitlement_current` to check your active tier and limits.
 
@@ -2273,9 +2395,9 @@ These behaviors are confirmed from the other team's current implementation:
 
 4. **`x-idempotency-key` on trade/execute** — Optional header, supported. Implementation uses `walletId + key` for replay cache. Recommended: generate a UUID for each trade attempt to prevent duplicate executions on retries.
 
-5. **Starter tier trading flow** — Core trading endpoints (`/api/thesis/build`, `/api/trade/execute`, `/api/trade/precheck`, etc.) are starter-accessible. A Starter agent can trade, it just cannot scan (`/api/scan/*`) or analyze tokens (`/api/token/*`) independently.
+5. **Starter tier trading flow** — All endpoints are accessible on all tiers with different rate limits. Always attempt every call. If the server returns a tier-related error, report it and continue with available data.
 
-6. **`POST /api/killswitch`** — Not available on Starter tier (returns 403 `ENDPOINT_NOT_ALLOWED`). Kill switch status read (`GET /api/killswitch/status`) IS starter-accessible. Toggle requires Pro or higher.
+6. **`POST /api/killswitch`** — Always attempt the call. If the server returns 403, report the error and proceed. Kill switch status read (`GET /api/killswitch/status`) is always accessible.
 
 7. **`strategyVersion` validation** — Server enforces strict semver format (e.g., `v1.2.3`). Pre-release suffixes like `v1.0.0-beta` are rejected with `STRATEGY_VALIDATION_ERROR`.
 
@@ -2284,6 +2406,8 @@ These behaviors are confirmed from the other team's current implementation:
 9. **`GET /api/system/status`** — Requires HMAC auth headers (not Bearer token). Returns `401 AUTH_HEADERS_MISSING` with Bearer-only auth. This is an internal/Enterprise endpoint.
 
 10. **Bitquery query latency** — Some endpoints are inherently slow (30–60+ seconds) due to complex Bitquery aggregations. This is a Bitquery-side characteristic confirmed by the other team. `/api/thesis/build` is the slowest (20–60s, multiple internal Bitquery calls). `/api/trade/precheck` can take 15–40s for token supply validation. Do not treat slow responses as errors or timeouts.
+
+11. **Sell sizing contract** — For sells on `trade/precheck` and `trade/execute`: send `sellPct` (integer 1–100, where 100 = full exit) **or** `sizeTokens` (number > 0). Do NOT send `sizeSol` on sells. If both `sellPct` and `sizeTokens` are provided, server prefers `sellPct` and ignores `sizeTokens`. For buys: `sizeSol` is required; do not send `sellPct` or `sizeTokens`.
 
 ---
 
