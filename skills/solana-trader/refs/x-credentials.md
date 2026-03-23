@@ -35,18 +35,23 @@
 ```json
 {
   "plugins": {
-    "solana-trader": {
-      "orchestratorUrl": "...",
-      "apiKey": "...",
-      "x": {
-        "consumerKey": "YOUR_CONSUMER_KEY",
-        "consumerSecret": "YOUR_CONSUMER_SECRET",
-        "profiles": {
-          "default": {
-            "accessToken": "YOUR_ACCESS_TOKEN",
-            "accessTokenSecret": "YOUR_ACCESS_TOKEN_SECRET",
-            "userId": "YOUR_X_USER_ID",
-            "username": "your_x_handle"
+    "entries": {
+      "solana-trader": {
+        "enabled": true,
+        "config": {
+          "orchestratorUrl": "...",
+          "apiKey": "...",
+          "x": {
+            "consumerKey": "YOUR_CONSUMER_KEY",
+            "consumerSecret": "YOUR_CONSUMER_SECRET",
+            "profiles": {
+              "default": {
+                "accessToken": "YOUR_ACCESS_TOKEN",
+                "accessTokenSecret": "YOUR_ACCESS_TOKEN_SECRET",
+                "userId": "YOUR_X_USER_ID",
+                "username": "your_x_handle"
+              }
+            }
           }
         }
       }

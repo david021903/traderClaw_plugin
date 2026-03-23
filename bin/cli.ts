@@ -308,7 +308,7 @@ async function cmdSetup(args: string[]) {
   Config:        ${CONFIG_FILE}
 `);
   print("Next steps:");
-  print("  1. Install the plugin:     openclaw plugins install solana-traderclaw-v1 (or: npm install -g solana-traderclaw-v1)");
+  print("  1. Install the plugin:     openclaw plugins install solana-trader (or: npm install -g solana-trader)");
   print("  2. Restart the gateway:    openclaw gateway --restart");
   print("  3. Start trading:          Ask OpenClaw to scan for opportunities");
   print("");

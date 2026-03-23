@@ -1,4 +1,4 @@
-# solana-traderclaw-v1 (TraderClaw V1)
+# solana-trader (TraderClaw V1)
 
 TraderClaw V1 plugin for autonomous Solana memecoin trading. Connects OpenClaw to a trading orchestrator that handles market data, risk enforcement, and trade execution. Includes a full memory layer with local persistence, episodic logging, deterministic compute tools, and OpenClaw-native memory integration.
 
@@ -34,17 +34,19 @@ The plugin gives OpenClaw tools to interact with the Solana trading orchestrator
 
 ### 1. Install the plugin
 
-The npm package name is **`solana-traderclaw-v1`**; the OpenClaw plugin id (used in `plugins.entries`) is **`solana-trader`**. The global CLI binary is **`traderclaw`**.
+The **npm package name** and **OpenClaw plugin id** are both **`solana-trader`** (so OpenClaw does not warn about id vs package mismatch). The global CLI binary is **`traderclaw`**.
 
 ```bash
-npm install -g solana-traderclaw-v1@1.0.6
+npm install -g solana-trader@1.0.17
 ```
 
 Or install directly into OpenClaw:
 
 ```bash
-openclaw plugins install solana-traderclaw-v1@1.0.6
+openclaw plugins install solana-trader@1.0.17
 ```
+
+The previous npm name **`solana-traderclaw-v1`** is retired; use **`solana-trader`** for new installs. Existing installs can `npm install -g solana-trader@latest` after you publish.
 
 ### 2. Run setup
 
@@ -154,8 +156,6 @@ Wallet proof note: if login/session challenge requires wallet ownership proof, p
 **`traderclaw login`:** Uses the saved refresh token when valid (no wallet key needed). Use `traderclaw login --force-reauth` when you intentionally want a full API challenge (e.g. after `traderclaw logout`).
 
 **Session / auth / startup issues:** follow the official guide — [Installation → Troubleshooting (session expired, auth, logged out)](https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out).
-
-**Config noise:** OpenClaw may warn about npm package name `solana-traderclaw-v1` vs plugin id `solana-trader`. That mismatch is expected; keep `plugins.entries.solana-trader` as documented.
 
 ### `traderclaw --help`
 
@@ -486,6 +486,7 @@ I'll monitor this position and review after exit.
 - Verify the wallet ID: `traderclaw config show`
 
 **Heartbeat not sending messages to Telegram:**
+- **Fresh `traderclaw setup`:** the installer runs `configureGatewayScheduling`, which sets a custom `heartbeat.prompt` on the `main` agent (no `HEARTBEAT_OK` escape). You only need the manual `openclaw config set` command below if you are on an older install or overwrote `agents.list`.
 - **`HEARTBEAT.md` must live in the agent workspace root** (default `~/.openclaw/workspace/HEARTBEAT.md`, next to `AGENTS.md`). A copy under `workspace/.openclaw/` or only inside the plugin package is **not** loaded as the heartbeat checklist. Copy from `skills/solana-trader/HEARTBEAT.md` in the installed package if needed. See [OpenClaw agent workspace](https://docs.openclaw.ai/concepts/agent-workspace).
 - OpenClaw's default heartbeat prompt tells the model "If nothing needs attention, reply HEARTBEAT_OK" — which is stripped and never delivered. Run `traderclaw setup` again (v1.0.16+) to set a custom prompt, or apply manually:
 
@@ -497,6 +498,11 @@ openclaw gateway restart
 - Verify with `openclaw config get agents` — the `main` agent should have a `heartbeat.prompt` field.
 - Confirm Telegram is healthy: `openclaw channels status --probe`
 - You must have messaged the bot at least once for `target: "last"` to have a delivery route.
+
+**Scheduled cron jobs run but you never see Telegram/WhatsApp output:**
+- TraderClaw templates merged into `~/.openclaw/cron/jobs.json` use **`delivery.mode: "announce"`** with **`channel: "last"`** so each completed isolated job posts a summary to the same channel you last used (see [OpenClaw cron delivery](https://docs.clawd.bot/automation/cron-jobs)).
+- If you installed before this behavior: run **`traderclaw setup`** again so the installer re-merges cron jobs, or stop the gateway and edit managed job entries in `~/.openclaw/cron/jobs.json` — set **`delivery`** to `{ "mode": "announce", "channel": "last", "bestEffort": true }` for each TraderClaw job (or remove `delivery` entirely; isolated jobs default to announce when omitted).
+- The same **`last`** requirement as heartbeat applies: message the bot at least once so the gateway knows where to deliver.
 
 **Tools returning errors:**
 - Run `traderclaw status` to check system health

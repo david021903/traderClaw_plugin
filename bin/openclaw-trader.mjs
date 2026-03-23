@@ -11,7 +11,7 @@ import { sortModelsByPreference } from "./llm-model-preference.mjs";
 
 const PACKAGE_JSON = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
 const VERSION = PACKAGE_JSON.version;
-const NPM_PACKAGE_NAME = typeof PACKAGE_JSON.name === "string" ? PACKAGE_JSON.name : "solana-traderclaw-v1";
+const NPM_PACKAGE_NAME = typeof PACKAGE_JSON.name === "string" ? PACKAGE_JSON.name : "solana-trader";
 const PLUGIN_ID = "solana-trader";
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
@@ -1016,7 +1016,7 @@ async function cmdSetup(args) {
     `  For the OpenClaw gateway (Telegram/agent tools), the same env must be set on the gateway service — not only in this shell. See: ${TRADERCLAW_SESSION_TROUBLESHOOTING_URL}`,
   );
   print("Next steps:");
-  print("  1. Install the plugin:     openclaw plugins install solana-traderclaw-v1 (or: npm install -g solana-traderclaw-v1)");
+  print("  1. Install the plugin:     openclaw plugins install solana-trader (or: npm install -g solana-trader)");
   print("  2. Restart the gateway:    openclaw gateway --restart");
   print("  3. Start trading:          Ask OpenClaw to scan for opportunities");
   print("");
@@ -2312,7 +2312,7 @@ async function cmdInstall(args) {
   const defaults = parseInstallWizardArgs(args);
   const { createInstallerStepEngine } = await import("./installer-step-engine.mjs");
   const modeConfig = {
-    pluginPackage: "solana-traderclaw-v1",
+    pluginPackage: "solana-trader",
     pluginId: "solana-trader",
     cliName: "traderclaw",
     gatewayConfig: "gateway-v1.json5",
