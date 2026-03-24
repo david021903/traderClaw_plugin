@@ -8,7 +8,6 @@ import { parseXConfig, registerXReadTools } from "./lib/x-tools.mjs";
 import { registerWebFetchTool } from "./lib/web-fetch.mjs";
 import * as fs from "fs";
 import * as path from "path";
-import { homedir } from "os";
 
 interface XConfig {
   ok: boolean;
@@ -156,38 +155,86 @@ const solanaTraderPlugin = {
       return;
     }
 
+    const dataDir = config.dataDir || path.join(process.cwd(), ".traderclaw-v1-data");
+    const sessionTokensPath = path.join(dataDir, "session-tokens.json");
+
+    interface SessionSidecar {
+      refreshToken?: string;
+      accessToken?: string;
+      accessTokenExpiresAt?: number;
+      walletPublicKey?: string;
+    }
+
+    const readSessionSidecar = (): SessionSidecar | null => {
+      try {
+        if (!fs.existsSync(sessionTokensPath)) return null;
+        const raw = JSON.parse(fs.readFileSync(sessionTokensPath, "utf-8"));
+        if (!raw || typeof raw !== "object") return null;
+        return raw as SessionSidecar;
+      } catch {
+        return null;
+      }
+    };
+
+    const writeSessionSidecarAtomic = (payload: SessionSidecar) => {
+      if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+      const tmp = `${sessionTokensPath}.${process.pid}.${Date.now()}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\n", "utf-8");
+      fs.renameSync(tmp, sessionTokensPath);
+    };
+
+    const sidecar = readSessionSidecar();
+    const effectiveRefreshToken =
+      typeof sidecar?.refreshToken === "string" && sidecar.refreshToken.length > 0
+        ? sidecar.refreshToken
+        : config.refreshToken;
+    const effectiveWalletPublicKey =
+      typeof sidecar?.walletPublicKey === "string" && sidecar.walletPublicKey.length > 0
+        ? sidecar.walletPublicKey
+        : config.walletPublicKey;
+
+    let initialAccessToken: string | undefined;
+    let initialAccessTokenExpiresAt: number | undefined;
+    if (
+      typeof sidecar?.accessToken === "string" &&
+      sidecar.accessToken.length > 0 &&
+      typeof sidecar.accessTokenExpiresAt === "number" &&
+      Date.now() < sidecar.accessTokenExpiresAt - 5000
+    ) {
+      initialAccessToken = sidecar.accessToken;
+      initialAccessTokenExpiresAt = sidecar.accessTokenExpiresAt;
+    }
+
     api.logger.info(
-      `[solana-trader] Session config: refreshToken=${config.refreshToken ? "present (" + config.refreshToken.slice(0, 8) + "...)" : "MISSING"}, ` +
-      `apiKey=${apiKey ? "present" : "MISSING"}, walletPublicKey=${config.walletPublicKey ? "present" : "MISSING"}`,
+      `[solana-trader] Session: sidecar=${sidecar ? "yes" : "no"}, refreshToken=${effectiveRefreshToken ? "present (" + effectiveRefreshToken.slice(0, 8) + "...)" : "MISSING"}, ` +
+        `apiKey=${apiKey ? "present" : "MISSING"}, walletPublicKey=${effectiveWalletPublicKey ? "present" : "MISSING"}`,
     );
 
     const sessionManager = new SessionManager({
       baseUrl: orchestratorUrl,
       apiKey: apiKey || "",
-      refreshToken: config.refreshToken,
-      walletPublicKey: config.walletPublicKey,
+      refreshToken: effectiveRefreshToken,
+      walletPublicKey: effectiveWalletPublicKey,
       walletPrivateKeyProvider: () => {
         const runtimeKey = process.env.TRADERCLAW_WALLET_PRIVATE_KEY || "";
         return runtimeKey.trim() || undefined;
       },
       clientLabel: "openclaw-plugin-runtime",
       timeout: apiTimeout,
+      initialAccessToken,
+      initialAccessTokenExpiresAt,
       onTokensRotated: (tokens) => {
-        const configPath = path.join(homedir(), ".openclaw", "openclaw.json");
         try {
-          const raw = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-          const entry = raw?.plugins?.entries?.["solana-trader"];
-          if (entry?.config) {
-            entry.config.refreshToken = tokens.refreshToken;
-            if (tokens.walletPublicKey) entry.config.walletPublicKey = tokens.walletPublicKey;
-            fs.writeFileSync(configPath, JSON.stringify(raw, null, 2) + "\n", "utf-8");
-            api.logger.info(`[solana-trader] Persisted rotated refreshToken to ${configPath}`);
-          } else {
-            api.logger.warn("[solana-trader] Could not persist refreshToken — plugin config entry not found in openclaw.json");
-          }
+          writeSessionSidecarAtomic({
+            refreshToken: tokens.refreshToken,
+            accessToken: tokens.accessToken,
+            accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+            walletPublicKey: tokens.walletPublicKey,
+          });
+          api.logger.info(`[solana-trader] Persisted session tokens to ${sessionTokensPath}`);
         } catch (err: unknown) {
           api.logger.warn(
-            `[solana-trader] Failed to persist rotated refreshToken: ${err instanceof Error ? err.message : String(err)}`,
+            `[solana-trader] Failed to persist session sidecar: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       },
@@ -268,7 +315,6 @@ const solanaTraderPlugin = {
         }
       };
 
-    const dataDir = config.dataDir || path.join(process.cwd(), ".traderclaw-v1-data");
     const stateDir = path.join(dataDir, "state");
     const logsDir = path.join(dataDir, "logs");
     const sharedLogsDir = path.join(logsDir, "shared");
