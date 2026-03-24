@@ -1,13 +1,13 @@
-# solana-traderclaw-v1 (TraderClaw V1)
+# traderclaw-team-v1
 
-TraderClaw V1 plugin for autonomous Solana memecoin trading. Connects OpenClaw to a trading orchestrator that handles market data, risk enforcement, and trade execution. Includes a full memory layer with local persistence, episodic logging, deterministic compute tools, and OpenClaw-native memory integration.
+Team edition of the TraderClaw V1 plugin for autonomous Solana memecoin trading. Full V1 trading capabilities plus 5 X/Twitter tools for journaling and community engagement. Connects OpenClaw to a trading orchestrator that handles market data, risk enforcement, and trade execution. Includes a full memory layer with local persistence, episodic logging, deterministic compute tools, and OpenClaw-native memory integration.
 
 ## Architecture
 
 ```
 OpenClaw Agent (brain: reasoning, decisions, strategy evolution)
        │
-       │ calls 66 typed tools
+       │ calls 72 typed tools (67 trading + 5 X)
        ▼
 Plugin (this package)
   ├── HTTP ──→ Orchestrator (data + risk + execution)
@@ -34,17 +34,19 @@ The plugin gives OpenClaw tools to interact with the Solana trading orchestrator
 
 ### 1. Install the plugin
 
-The npm package name is **`solana-traderclaw-v1`**; the OpenClaw plugin id (used in `plugins.entries`) is **`solana-trader`**. The global CLI binary is **`traderclaw`**.
+Install the **npm package** **`traderclaw-team-v1`**. The **OpenClaw plugin id** in `openclaw.json` stays **`solana-trader`** (same as `openclaw.plugin.json`). The global CLI binary is **`traderclaw`**.
 
 ```bash
-npm install -g solana-traderclaw-v1@1.0.6
+npm install -g traderclaw-team-v1
 ```
 
 Or install directly into OpenClaw:
 
 ```bash
-openclaw plugins install solana-traderclaw-v1@1.0.6
+openclaw plugins install traderclaw-team-v1
 ```
+
+**Names:** This team edition publishes as **`traderclaw-team-v1`** on npm. The public **`solana-traderclaw`** package remains the default TraderClaw build; use this package when you need X posting + journal tools. OpenClaw may log a benign id hint if the npm package name and manifest `id` differ — config keys remain **`plugins.entries.solana-trader`**.
 
 ### 2. Run setup
 
@@ -70,7 +72,7 @@ openclaw gateway restart
 traderclaw install --wizard
 ```
 
-This opens a localhost UI that runs prechecks, lane-aware setup, gateway validation, optional Telegram setup, and final verification.
+This opens a localhost UI that runs prechecks, lane-aware setup, gateway validation, optional Telegram setup, and final verification. It also installs **`HEARTBEAT.md` into your OpenClaw agent workspace root** (default `~/.openclaw/workspace/HEARTBEAT.md`) from the packaged skill so heartbeats load the TraderClaw checklist without manual `cp`. `traderclaw setup` does the same.
 
 ### Optional: Run CLI prechecks directly
 
@@ -145,7 +147,7 @@ traderclaw config set <key> <v> # Update a value
 traderclaw config reset         # Remove all plugin config
 ```
 
-Available config keys: `orchestratorUrl`, `walletId`, `apiKey`, `apiTimeout`, `refreshToken`, `walletPublicKey`, `gatewayBaseUrl`, `gatewayToken`, `agentId`
+Available config keys: `orchestratorUrl`, `walletId`, `apiKey`, `apiTimeout`, `refreshToken`, `walletPublicKey`, `walletPrivateKey`, `gatewayBaseUrl`, `gatewayToken`, `agentId`
 
 Wallet proof note: if login/session challenge requires wallet ownership proof, provide the key at runtime with `--wallet-private-key` or `TRADERCLAW_WALLET_PRIVATE_KEY`. It is used for local signing only and is not stored in `~/.openclaw/openclaw.json`.
 
@@ -154,8 +156,6 @@ Wallet proof note: if login/session challenge requires wallet ownership proof, p
 **`traderclaw login`:** Uses the saved refresh token when valid (no wallet key needed). Use `traderclaw login --force-reauth` when you intentionally want a full API challenge (e.g. after `traderclaw logout`).
 
 **Session / auth / startup issues:** follow the official guide — [Installation → Troubleshooting (session expired, auth, logged out)](https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out).
-
-**Config noise:** OpenClaw may warn about npm package name `solana-traderclaw-v1` vs plugin id `solana-trader`. That mismatch is expected; keep `plugins.entries.solana-trader` as documented.
 
 ### `traderclaw --help`
 
@@ -179,7 +179,7 @@ If you prefer to configure manually instead of using the CLI, add to `~/.opencla
           orchestratorUrl: "https://api.traderclaw.ai",
           walletId: 1,
           apiKey: "sk_live_your_key_here",
-          apiTimeout: 80000,  // optional, default 80s
+          apiTimeout: 30000,  // optional, default 30s
           dataDir: "/path/to/data"  // optional, default: <cwd>/.traderclaw-v1-data
         }
       }
@@ -249,7 +249,59 @@ memory/
 └── ...                     # Auto-pruned after 7 days
 ```
 
-## Available Tools (66)
+## X/Twitter Setup
+
+The team edition includes 5 X/Twitter tools for trade journaling and community engagement. Setup requires an X Developer App.
+
+### 1. Create an X Developer App
+
+1. Go to [developer.x.com](https://developer.x.com) and sign in
+2. Create a new App (Free tier is sufficient for posting — 1,500 tweets/month)
+3. Note your **Consumer Key** and **Consumer Secret**
+4. Under "User authentication settings", enable OAuth 1.0a with Read and Write permissions
+5. Generate **Access Token** and **Access Token Secret** for the account that will post
+
+### 2. Configure via Environment Variables
+
+```bash
+export X_CONSUMER_KEY="your-app-consumer-key"
+export X_CONSUMER_SECRET="your-app-consumer-secret"
+export X_ACCESS_TOKEN_MAIN="your-access-token"
+export X_ACCESS_TOKEN_MAIN_SECRET="your-access-token-secret"
+```
+
+The installer will pick these up automatically during the `x_credentials` step.
+
+### 3. Or Configure via Plugin Config
+
+Add to `~/.openclaw/openclaw.json` under the plugin entry:
+
+```json
+{
+  "x": {
+    "consumerKey": "your-app-consumer-key",
+    "consumerSecret": "your-app-consumer-secret",
+    "profiles": {
+      "main": {
+        "accessToken": "your-access-token",
+        "accessTokenSecret": "your-access-token-secret"
+      }
+    }
+  }
+}
+```
+
+### X API Tiers
+
+| Tier | Cost | Capabilities |
+|------|------|-------------|
+| Free | $0 | 1,500 posts/month (write-only) |
+| Pay-as-you-go | Per-credit | Read access (mentions, search, threads) |
+| Basic | $200/month | Higher limits, more read access |
+
+Free tier is sufficient for daily trade journaling. Pay-as-you-go is recommended if you want to read mentions and search.
+
+## Available Tools (72 — 67 trading + 5 X)
 
 ### Scanning
 | Tool | Description |
@@ -352,8 +404,7 @@ memory/
 | `solana_gateway_credentials_delete` | Delete gateway credentials |
 | `solana_gateway_forward_probe` | Probe gateway forwarding connectivity |
 | `solana_agent_sessions` | View agent session diagnostics |
-| `solana_startup_gate` | Run startup gate sequence (includes `welcomeMessage` on full pass; may include it if only capital step fails — see tool output) |
-| `solana_traderclaw_welcome` | Post-startup welcome for the user (includes API key when in config) |
+| `solana_startup_gate` | Run startup gate sequence |
 | `solana_runtime_status` | Get runtime status diagnostics |
 
 ### Local Durable State
@@ -397,6 +448,15 @@ memory/
 | Tool | Description |
 |------|-------------|
 | `solana_daily_log` | Append to today's daily log (auto-loaded by OpenClaw next session, 7-day prune) |
+
+### X/Twitter
+| Tool | Description |
+|------|-------------|
+| `x_post_tweet` | Post a tweet from the agent's configured X profile (max 280 chars) |
+| `x_reply_tweet` | Reply to a specific tweet |
+| `x_read_mentions` | Read recent @mentions (pay-as-you-go tier) |
+| `x_search_tweets` | Search recent tweets by keyword/hashtag |
+| `x_get_thread` | Read a full conversation thread |
 
 ## Hooks (2)
 

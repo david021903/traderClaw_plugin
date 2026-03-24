@@ -4,7 +4,7 @@ import { orchestratorRequest } from "./src/http-client.js";
 import { SessionManager } from "./src/session-manager.js";
 import { AlphaBuffer } from "./src/alpha-buffer.js";
 import { AlphaStreamManager } from "./src/alpha-ws.js";
-import { parseXConfig, registerXReadTools } from "./lib/x-tools.mjs";
+import { parseXConfig, registerXTools } from "./lib/x-tools.mjs";
 import { registerWebFetchTool } from "./lib/web-fetch.mjs";
 import * as fs from "fs";
 import * as path from "path";
@@ -155,22 +155,88 @@ const solanaTraderPlugin = {
       return;
     }
 
+    const dataDir = config.dataDir || path.join(process.cwd(), ".traderclaw-v1-data");
+    const sessionTokensPath = path.join(dataDir, "session-tokens.json");
+
+    interface SessionSidecar {
+      refreshToken?: string;
+      accessToken?: string;
+      accessTokenExpiresAt?: number;
+      walletPublicKey?: string;
+    }
+
+    const readSessionSidecar = (): SessionSidecar | null => {
+      try {
+        if (!fs.existsSync(sessionTokensPath)) return null;
+        const raw = JSON.parse(fs.readFileSync(sessionTokensPath, "utf-8"));
+        if (!raw || typeof raw !== "object") return null;
+        return raw as SessionSidecar;
+      } catch {
+        return null;
+      }
+    };
+
+    const writeSessionSidecarAtomic = (payload: SessionSidecar) => {
+      if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+      const tmp = `${sessionTokensPath}.${process.pid}.${Date.now()}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\n", "utf-8");
+      fs.renameSync(tmp, sessionTokensPath);
+    };
+
+    const sidecar = readSessionSidecar();
+    const effectiveRefreshToken =
+      typeof sidecar?.refreshToken === "string" && sidecar.refreshToken.length > 0
+        ? sidecar.refreshToken
+        : config.refreshToken;
+    const effectiveWalletPublicKey =
+      typeof sidecar?.walletPublicKey === "string" && sidecar.walletPublicKey.length > 0
+        ? sidecar.walletPublicKey
+        : config.walletPublicKey;
+
+    let initialAccessToken: string | undefined;
+    let initialAccessTokenExpiresAt: number | undefined;
+    if (
+      typeof sidecar?.accessToken === "string" &&
+      sidecar.accessToken.length > 0 &&
+      typeof sidecar.accessTokenExpiresAt === "number" &&
+      Date.now() < sidecar.accessTokenExpiresAt - 5000
+    ) {
+      initialAccessToken = sidecar.accessToken;
+      initialAccessTokenExpiresAt = sidecar.accessTokenExpiresAt;
+    }
+
+    api.logger.info(
+      `[solana-trader] Session: sidecar=${sidecar ? "yes" : "no"}, refreshToken=${effectiveRefreshToken ? "present (" + effectiveRefreshToken.slice(0, 8) + "...)" : "MISSING"}, ` +
+        `apiKey=${apiKey ? "present" : "MISSING"}, walletPublicKey=${effectiveWalletPublicKey ? "present" : "MISSING"}`,
+    );
+
     const sessionManager = new SessionManager({
       baseUrl: orchestratorUrl,
       apiKey: apiKey || "",
-      refreshToken: config.refreshToken,
-      walletPublicKey: config.walletPublicKey,
+      refreshToken: effectiveRefreshToken,
+      walletPublicKey: effectiveWalletPublicKey,
       walletPrivateKeyProvider: () => {
         const runtimeKey = process.env.TRADERCLAW_WALLET_PRIVATE_KEY || "";
         return runtimeKey.trim() || undefined;
       },
       clientLabel: "openclaw-plugin-runtime",
       timeout: apiTimeout,
+      initialAccessToken,
+      initialAccessTokenExpiresAt,
       onTokensRotated: (tokens) => {
-        api.logger.info(
-          `[solana-trader] Session tokens rotated. New refreshToken: ${tokens.refreshToken.slice(0, 8)}... ` +
-          `Update config with: traderclaw config set refreshToken ${tokens.refreshToken}`
-        );
+        try {
+          writeSessionSidecarAtomic({
+            refreshToken: tokens.refreshToken,
+            accessToken: tokens.accessToken,
+            accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+            walletPublicKey: tokens.walletPublicKey,
+          });
+          api.logger.info(`[solana-trader] Persisted session tokens to ${sessionTokensPath}`);
+        } catch (err: unknown) {
+          api.logger.warn(
+            `[solana-trader] Failed to persist session sidecar: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       },
       logger: {
         info: (msg) => api.logger.info(`[solana-trader] ${msg}`),
@@ -249,7 +315,6 @@ const solanaTraderPlugin = {
         }
       };
 
-    const dataDir = config.dataDir || path.join(process.cwd(), ".traderclaw-v1-data");
     const stateDir = path.join(dataDir, "state");
     const logsDir = path.join(dataDir, "logs");
     const sharedLogsDir = path.join(logsDir, "shared");
@@ -509,32 +574,48 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_trade_precheck",
-      description: "Pre-trade risk check — validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade.",
+      description:
+        "Pre-trade risk check — validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade. " +
+        "Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
-        sizeSol: Type.Number({ description: "Intended position size in SOL" }),
+        sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL — required for buy, omit for sell" })),
+        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1–100 (100 = full exit) — sell only; preferred over sizeTokens if both sent" })),
+        sizeTokens: Type.Optional(Type.Number({ description: "Token amount to sell — sell only; ignored if sellPct is also provided" })),
         slippageBps: Type.Optional(Type.Number({ description: "Slippage tolerance in basis points (e.g., 300 = 3%)" })),
       }),
-      execute: wrapExecute(async (_id, params) =>
-        post("/api/trade/precheck", {
+      execute: wrapExecute(async (_id, params) => {
+        const body: Record<string, unknown> = {
           tokenAddress: params.tokenAddress,
           side: params.side,
-          sizeSol: params.sizeSol,
           slippageBps: params.slippageBps,
-        }),
-      ),
+        };
+        if (params.side === "buy") {
+          body.sizeSol = params.sizeSol;
+        } else {
+          if (params.sellPct !== undefined) {
+            body.sellPct = params.sellPct;
+          } else if (params.sizeTokens !== undefined) {
+            body.sizeTokens = params.sizeTokens;
+          }
+        }
+        return post("/api/trade/precheck", body);
+      }),
     });
 
     api.registerTool({
       name: "solana_trade_execute",
       description:
         "Execute a trade on Solana via the SpyFly bot. Enforces risk rules before proxying to on-chain execution. Returns trade ID, position ID, and transaction signature. " +
-        "IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain — use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%).",
+        "IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain — use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%). " +
+        "Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
-        sizeSol: Type.Number({ description: "Position size in SOL" }),
+        sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL — required for buy, omit for sell" })),
+        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1–100 (100 = full exit) — sell only; preferred over sizeTokens if both sent" })),
+        sizeTokens: Type.Optional(Type.Number({ description: "Token amount to sell — sell only; ignored if sellPct is also provided" })),
         symbol: Type.String({ description: "Token symbol (e.g., BONK, WIF)" }),
         slippageBps: Type.Optional(Type.Number({ description: "Slippage in basis points (default: 300)" })),
         slPct: Type.Optional(Type.Number({ description: "Stop-loss percentage (e.g., 15 = 15% below entry)" })),
@@ -580,13 +661,21 @@ const solanaTraderPlugin = {
         const body: Record<string, unknown> = {
           tokenAddress: params.tokenAddress,
           side: params.side,
-          sizeSol: params.sizeSol,
           symbol: params.symbol,
           slippageBps: params.slippageBps,
           slPct: params.slPct,
           trailingStopPct: params.trailingStopPct,
           managementMode: params.managementMode,
         };
+        if (params.side === "buy") {
+          body.sizeSol = params.sizeSol;
+        } else {
+          if (params.sellPct !== undefined) {
+            body.sellPct = params.sellPct;
+          } else if (params.sizeTokens !== undefined) {
+            body.sizeTokens = params.sizeTokens;
+          }
+        }
         const tpExits = params.tpExits as Array<{ percent: number; amountPct: number }> | undefined;
         const slExits = params.slExits as Array<{ percent: number; amountPct: number }> | undefined;
         if (Array.isArray(tpExits) && tpExits.length > 0) {
@@ -2394,12 +2483,12 @@ const solanaTraderPlugin = {
       },
     });
 
-    registerXReadTools(api, Type, config.xConfig, config.agentId || "main", "[solana-trader]");
+    registerXTools(api, Type, config.xConfig, config.agentId || "main", "[solana-trader]");
     registerWebFetchTool(api, Type, "[solana-trader]");
 
-    const xToolCount = config.xConfig?.ok ? 3 : 0;
+    const xToolCount = config.xConfig?.ok ? 5 : 0;
     api.logger.info(
-      `[solana-trader] Registered ${67 + xToolCount} tools (67 trading + ${xToolCount} X/Twitter read) for walletId ${walletId} (session auth mode)`,
+      `[solana-trader] Registered ${67 + xToolCount} tools (67 trading + ${xToolCount} X/Twitter) for walletId ${walletId} (session auth mode)`,
     );
   },
 };

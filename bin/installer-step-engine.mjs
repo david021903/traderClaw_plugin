@@ -1,12 +1,25 @@
 import { execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
 
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
+
+/** Directory containing this repo when running from a git checkout or global npm install (…/package/bin/this-file → package root). */
+const PLUGIN_PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+function resolvePluginInstallSpec(modeConfig) {
+  const manifest = join(PLUGIN_PACKAGE_ROOT, "openclaw.plugin.json");
+  const pkgJson = join(PLUGIN_PACKAGE_ROOT, "package.json");
+  if (existsSync(manifest) && existsSync(pkgJson)) {
+    return PLUGIN_PACKAGE_ROOT;
+  }
+  return modeConfig.pluginPackage;
+}
 
 /** Older npm / plugin ids that may linger in ~/.openclaw/extensions on upgrades. */
 const LEGACY_TRADER_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1"];
@@ -217,8 +230,16 @@ function isNpmGlobalBinConflict(err, cliName) {
 }
 
 async function installPlugin(modeConfig, onEvent) {
+  const spec = resolvePluginInstallSpec(modeConfig);
+  if (spec !== modeConfig.pluginPackage && typeof onEvent === "function") {
+    onEvent({
+      type: "stdout",
+      text: `Installing TraderClaw CLI from local package path (not on npm registry): ${spec}\n`,
+      urls: [],
+    });
+  }
   try {
-    await runCommandWithEvents("npm", ["install", "-g", modeConfig.pluginPackage], { onEvent });
+    await runCommandWithEvents("npm", ["install", "-g", spec], { onEvent });
     return { installed: true, available: commandExists(modeConfig.cliName), forced: false };
   } catch (err) {
     if (!isNpmGlobalBinConflict(err, modeConfig.cliName)) throw err;
@@ -229,7 +250,7 @@ async function installPlugin(modeConfig, onEvent) {
         urls: [],
       });
     }
-    await runCommandWithEvents("npm", ["install", "-g", "--force", modeConfig.pluginPackage], { onEvent });
+    await runCommandWithEvents("npm", ["install", "-g", "--force", spec], { onEvent });
     return { installed: true, available: commandExists(modeConfig.cliName), forced: true };
   }
 }
@@ -265,9 +286,10 @@ async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorU
 
   seedPluginConfig(modeConfig, orchestratorUrl || "https://api.traderclaw.ai");
 
+  const pluginInstallSpec = resolvePluginInstallSpec(modeConfig);
   let recoveredExistingDir = null;
   try {
-    await runCommandWithEvents("openclaw", ["plugins", "install", modeConfig.pluginPackage], { onEvent });
+    await runCommandWithEvents("openclaw", ["plugins", "install", pluginInstallSpec], { onEvent });
   } catch (err) {
     if (!isPluginAlreadyExistsError(err, modeConfig.pluginId)) {
       throw err;
@@ -276,7 +298,7 @@ async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorU
     if (!recoveredExistingDir) {
       throw err;
     }
-    await runCommandWithEvents("openclaw", ["plugins", "install", modeConfig.pluginPackage], { onEvent });
+    await runCommandWithEvents("openclaw", ["plugins", "install", pluginInstallSpec], { onEvent });
   }
 
   // Manifest is on disk now; merge orchestrator URL before enable (plugin config schema may require it).
@@ -545,6 +567,113 @@ function deployGatewayConfig(modeConfig) {
   return { deployed: true, source: src, dest: destFile };
 }
 
+function accessTokenEnvBase(agentId) {
+  return `X_ACCESS_TOKEN_${agentId.toUpperCase().replace(/-/g, "_")}`;
+}
+
+function getConsumerKeysFromWizard(wizardOpts = {}) {
+  const w = wizardOpts || {};
+  const ck = (typeof w.xConsumerKey === "string" ? w.xConsumerKey : "").trim() || process.env.X_CONSUMER_KEY || "";
+  const cs = (typeof w.xConsumerSecret === "string" ? w.xConsumerSecret : "").trim() || process.env.X_CONSUMER_SECRET || "";
+  return { consumerKey: ck, consumerSecret: cs };
+}
+
+function getAccessPairForAgent(wizardOpts, agentId) {
+  const w = wizardOpts || {};
+  const envBase = accessTokenEnvBase(agentId);
+  let at = "";
+  let ats = "";
+  if (agentId === "main") {
+    at = (typeof w.xAccessTokenMain === "string" ? w.xAccessTokenMain : "").trim() || process.env[envBase] || "";
+    ats = (typeof w.xAccessTokenMainSecret === "string" ? w.xAccessTokenMainSecret : "").trim() || process.env[`${envBase}_SECRET`] || "";
+  } else if (agentId === "cto") {
+    at = (typeof w.xAccessTokenCto === "string" ? w.xAccessTokenCto : "").trim() || process.env[envBase] || "";
+    ats = (typeof w.xAccessTokenCtoSecret === "string" ? w.xAccessTokenCtoSecret : "").trim() || process.env[`${envBase}_SECRET`] || "";
+  } else if (agentId === "intern") {
+    at = (typeof w.xAccessTokenIntern === "string" ? w.xAccessTokenIntern : "").trim() || process.env[envBase] || "";
+    ats = (typeof w.xAccessTokenInternSecret === "string" ? w.xAccessTokenInternSecret : "").trim() || process.env[`${envBase}_SECRET`] || "";
+  } else {
+    at = process.env[envBase] || "";
+    ats = process.env[`${envBase}_SECRET`] || "";
+  }
+  return { at, ats };
+}
+
+function seedXConfig(modeConfig, configPath = CONFIG_FILE, wizardOpts = {}) {
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    config = {};
+  }
+
+  if (!config.plugins || typeof config.plugins !== "object") config.plugins = {};
+  if (!config.plugins.entries || typeof config.plugins.entries !== "object") config.plugins.entries = {};
+
+  const entry = config.plugins.entries[modeConfig.pluginId];
+  if (!entry || typeof entry !== "object") return { skipped: true, reason: "plugin entry not found" };
+  if (!entry.config || typeof entry.config !== "object") entry.config = {};
+
+  const { consumerKey, consumerSecret } = getConsumerKeysFromWizard(wizardOpts);
+
+  if (!consumerKey || !consumerSecret) {
+    return { skipped: true, reason: "X_CONSUMER_KEY and/or X_CONSUMER_SECRET not set" };
+  }
+
+  if (!entry.config.x || typeof entry.config.x !== "object") entry.config.x = {};
+  entry.config.x.consumerKey = consumerKey;
+  entry.config.x.consumerSecret = consumerSecret;
+
+  if (!entry.config.x.profiles || typeof entry.config.x.profiles !== "object") {
+    entry.config.x.profiles = {};
+  }
+
+  const agentIds = modeConfig.pluginId === "solana-trader-v2"
+    ? ["cto", "intern"]
+    : ["main"];
+  let profilesFound = 0;
+
+  for (const agentId of agentIds) {
+    const { at, ats } = getAccessPairForAgent(wizardOpts, agentId);
+    if (at && ats) {
+      entry.config.x.profiles[agentId] = { accessToken: at, accessTokenSecret: ats };
+      profilesFound++;
+    }
+  }
+
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  return { configured: true, consumerKey: "***", profilesFound, agentIds };
+}
+
+async function verifyXCredentials(consumerKey, consumerSecret, accessToken, accessTokenSecret) {
+  const { createHmac, randomBytes: rb } = await import("crypto");
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const nonce = rb(16).toString("hex");
+  const method = "GET";
+  const url = "https://api.x.com/2/users/me";
+  const params = {
+    oauth_consumer_key: consumerKey,
+    oauth_nonce: nonce,
+    oauth_signature_method: "HMAC-SHA1",
+    oauth_timestamp: timestamp,
+    oauth_token: accessToken,
+    oauth_version: "1.0",
+  };
+  const paramStr = Object.keys(params).sort().map(k => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`).join("&");
+  const baseStr = `${method}&${encodeURIComponent(url)}&${encodeURIComponent(paramStr)}`;
+  const sigKey = `${encodeURIComponent(consumerSecret)}&${encodeURIComponent(accessTokenSecret)}`;
+  const sig = createHmac("sha1", sigKey).update(baseStr).digest("base64");
+  const authHeader = `OAuth ${Object.entries({ ...params, oauth_signature: sig }).map(([k, v]) => `${encodeURIComponent(k)}="${encodeURIComponent(v)}"`).join(", ")}`;
+  const res = await fetch(url, { headers: { Authorization: authHeader }, signal: AbortSignal.timeout(10000) });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    return { ok: false, status: res.status, error: body };
+  }
+  const data = await res.json();
+  return { ok: true, userId: data?.data?.id, username: data?.data?.username };
+}
+
 function listProviderModels(provider) {
   const cmd = `openclaw models list --all --provider ${shellQuote(provider)} --json`;
   const raw = getCommandOutput(cmd);
@@ -698,8 +827,47 @@ function verifyInstallation(modeConfig, apiKey) {
     { label: "Gateway configuration", ok: existsSync(gatewayFile), note: "not found" },
     { label: "Heartbeat scheduling", ok: heartbeatConfigured, note: "agent will not wake autonomously" },
     { label: "Cron jobs configured", ok: cronConfigured, note: "scheduled maintenance jobs missing" },
+    { label: "HEARTBEAT.md deployed", ok: existsSync(join(CONFIG_DIR, "workspace", "HEARTBEAT.md")), note: "agent will reply HEARTBEAT_OK and not trade autonomously" },
     { label: "API key configured", ok: !!apiKey, note: "needs setup" },
   ];
+}
+
+function deployHeartbeatTemplate() {
+  const workspaceDir = join(CONFIG_DIR, "workspace");
+  mkdirSync(workspaceDir, { recursive: true });
+  const dest = join(workspaceDir, "HEARTBEAT.md");
+
+  if (existsSync(dest)) {
+    const existing = readFileSync(dest, "utf-8").trim();
+    const isShippedTemplate = existing.startsWith("# Trading Heartbeat") && existing.includes("Never reply HEARTBEAT_OK");
+    if (existing.length > 0 && !isShippedTemplate) {
+      return { deployed: false, reason: "user_customized", dest };
+    }
+  }
+
+  const npmRoot = getCommandOutput("npm root -g");
+  if (!npmRoot) return { deployed: false, reason: "npm_root_not_found", dest };
+
+  const candidatePaths = [
+    join(npmRoot, "traderclaw-team-v2", "skills", "solana-trader", "HEARTBEAT.md"),
+    join(npmRoot, "traderclaw-team-v1", "skills", "solana-trader", "HEARTBEAT.md"),
+  ];
+
+  let src = null;
+  for (const p of candidatePaths) {
+    if (existsSync(p)) { src = p; break; }
+  }
+
+  if (!src) {
+    const thisBinDir = dirname(fileURLToPath(import.meta.url));
+    const skillDir = join(thisBinDir, "..", "skills", "solana-trader", "HEARTBEAT.md");
+    if (existsSync(skillDir)) src = skillDir;
+  }
+
+  if (!src) return { deployed: false, reason: "source_not_found", dest };
+
+  copyFileSync(src, dest);
+  return { deployed: true, source: src, dest };
 }
 
 function nowIso() {
@@ -737,6 +905,15 @@ export class InstallerStepEngine {
       skipTailscale: options.skipTailscale === true,
       skipGatewayBootstrap: options.skipGatewayBootstrap === true,
       skipGatewayConfig: options.skipGatewayConfig === true,
+      // Wizard / CLI — must be preserved for seedXConfig (constructor previously dropped these)
+      xConsumerKey: typeof options.xConsumerKey === "string" ? options.xConsumerKey : "",
+      xConsumerSecret: typeof options.xConsumerSecret === "string" ? options.xConsumerSecret : "",
+      xAccessTokenMain: typeof options.xAccessTokenMain === "string" ? options.xAccessTokenMain : "",
+      xAccessTokenMainSecret: typeof options.xAccessTokenMainSecret === "string" ? options.xAccessTokenMainSecret : "",
+      xAccessTokenCto: typeof options.xAccessTokenCto === "string" ? options.xAccessTokenCto : "",
+      xAccessTokenCtoSecret: typeof options.xAccessTokenCtoSecret === "string" ? options.xAccessTokenCtoSecret : "",
+      xAccessTokenIntern: typeof options.xAccessTokenIntern === "string" ? options.xAccessTokenIntern : "",
+      xAccessTokenInternSecret: typeof options.xAccessTokenInternSecret === "string" ? options.xAccessTokenInternSecret : "",
     };
     this.hooks = {
       onStepEvent: typeof hooks.onStepEvent === "function" ? hooks.onStepEvent : () => {},
@@ -1121,6 +1298,18 @@ export class InstallerStepEngine {
         return { ...result, restart };
       });
 
+      await this.runStep("deploy_heartbeat", "Deploying HEARTBEAT.md to workspace", async () => {
+        const result = deployHeartbeatTemplate();
+        if (result.deployed) {
+          this.emitLog("deploy_heartbeat", "info", `HEARTBEAT.md deployed to ${result.dest}`);
+        } else if (result.reason === "user_customized") {
+          this.emitLog("deploy_heartbeat", "info", `HEARTBEAT.md already customized by user at ${result.dest} — skipping.`);
+        } else {
+          this.emitLog("deploy_heartbeat", "warn", `Could not deploy HEARTBEAT.md (${result.reason}). The agent may reply HEARTBEAT_OK and not trade autonomously.`);
+        }
+        return result;
+      });
+
       await this.runStep("setup_handoff", "Preparing secure setup handoff", async () => {
         const handoff = this.buildSetupHandoff();
         this.state.setupHandoff = handoff;
@@ -1139,6 +1328,41 @@ export class InstallerStepEngine {
         });
       }
 
+      await this.runStep("x_credentials", "Configuring X/Twitter credentials", async () => {
+        const result = seedXConfig(this.modeConfig, CONFIG_FILE, this.options);
+        if (result.skipped) {
+          this.emitLog("x_credentials", "warn", `X setup skipped: ${result.reason}. Set X_CONSUMER_KEY, X_CONSUMER_SECRET, and per-agent X_ACCESS_TOKEN_<AGENT_ID> / X_ACCESS_TOKEN_<AGENT_ID>_SECRET env vars to enable.`);
+          return result;
+        }
+        this.emitLog("x_credentials", "info", `X credentials configured. Profiles found: ${result.profilesFound}/${result.agentIds.length}`);
+        if (result.profilesFound < result.agentIds.length) {
+          const missing = result.agentIds.filter((id) => {
+            const { at, ats } = getAccessPairForAgent(this.options, id);
+            return !at || !ats;
+          });
+          this.emitLog("x_credentials", "warn", `Missing X profiles for: ${missing.join(", ")}. Set tokens in the wizard or X_ACCESS_TOKEN_<AGENT_ID> / X_ACCESS_TOKEN_<AGENT_ID>_SECRET env vars.`);
+        }
+        const { consumerKey, consumerSecret } = getConsumerKeysFromWizard(this.options);
+        const verified = [];
+        for (const agentId of result.agentIds) {
+          const { at, ats } = getAccessPairForAgent(this.options, agentId);
+          if (at && ats) {
+            try {
+              const check = await verifyXCredentials(consumerKey, consumerSecret, at, ats);
+              if (check.ok) {
+                this.emitLog("x_credentials", "info", `Verified X profile '${agentId}': @${check.username} (${check.userId})`);
+                verified.push({ agentId, username: check.username, userId: check.userId });
+              } else {
+                this.emitLog("x_credentials", "warn", `X credential verification failed for '${agentId}': HTTP ${check.status}`);
+              }
+            } catch (err) {
+              this.emitLog("x_credentials", "warn", `X credential verification error for '${agentId}': ${err?.message || String(err)}`);
+            }
+          }
+        }
+        return { ...result, verified };
+      });
+
       await this.runStep("telegram_required", "Configuring required Telegram channel", async () => this.runTelegramStep());
       await this.runStep("verify", "Verifying installation", async () => {
         const checks = verifyInstallation(this.modeConfig, this.options.apiKey);
@@ -1156,6 +1380,23 @@ export class InstallerStepEngine {
       return this.state;
     }
   }
+}
+
+export function assertWizardXCredentials(modeConfig, options = {}) {
+  const t = (s) => (typeof s === "string" ? s.trim() : "");
+  const o = options || {};
+  if (modeConfig.pluginId === "solana-trader-v2") {
+    const need = ["xConsumerKey", "xConsumerSecret", "xAccessTokenCto", "xAccessTokenCtoSecret", "xAccessTokenIntern", "xAccessTokenInternSecret"];
+    for (const k of need) {
+      if (!t(o[k])) return `Missing required X/Twitter field: ${k}`;
+    }
+    return null;
+  }
+  const need = ["xConsumerKey", "xConsumerSecret", "xAccessTokenMain", "xAccessTokenMainSecret"];
+  for (const k of need) {
+    if (!t(o[k])) return `Missing required X/Twitter field: ${k}`;
+  }
+  return null;
 }
 
 export function createInstallerStepEngine(modeConfig, options = {}, hooks = {}) {

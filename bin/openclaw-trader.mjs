@@ -888,7 +888,7 @@ async function cmdSetup(args) {
     `  For the OpenClaw gateway (Telegram/agent tools), the same env must be set on the gateway service — not only in this shell. See: ${TRADERCLAW_SESSION_TROUBLESHOOTING_URL}`,
   );
   print("Next steps:");
-  print("  1. Install the plugin:     openclaw plugins install solana-traderclaw-v1 (or: npm install -g solana-traderclaw-v1)");
+  print("  1. Install the plugin:     openclaw plugins install traderclaw-team-v1 (or: npm install -g traderclaw-team-v1)");
   print("  2. Restart the gateway:    openclaw gateway --restart");
   print("  3. Start trading:          Ask OpenClaw to scan for opportunities");
   print("");
@@ -1258,6 +1258,10 @@ function parseInstallWizardArgs(args) {
     gatewayToken: "",
     enableTelegram: false,
     telegramToken: "",
+    xConsumerKey: "",
+    xConsumerSecret: "",
+    xAccessTokenMain: "",
+    xAccessTokenMainSecret: "",
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -1619,6 +1623,31 @@ function wizardHtml(defaults) {
           </div>
         </div>
       </div>
+      <div class="card" id="xCard">
+        <h3>Required: X (Twitter) OAuth 1.0a</h3>
+        <p class="muted">App keys plus user access token for the <code>main</code> agent profile (journal &amp; engagement tools).</p>
+        <div class="grid">
+          <div>
+            <label>X consumer key (required)</label>
+            <input id="xConsumerKey" type="password" autocomplete="off" placeholder="From your X Developer App" />
+          </div>
+          <div>
+            <label>X consumer secret (required)</label>
+            <input id="xConsumerSecret" type="password" autocomplete="off" />
+          </div>
+        </div>
+        <div class="grid" style="margin-top:12px;">
+          <div>
+            <label>X access token — main profile (required)</label>
+            <input id="xAccessTokenMain" type="password" autocomplete="off" placeholder="User access token for the posting account" />
+          </div>
+          <div>
+            <label>X access token secret — main profile (required)</label>
+            <input id="xAccessTokenMainSecret" type="password" autocomplete="off" />
+          </div>
+        </div>
+        <p class="muted">Create an app at <a href="https://developer.x.com" target="_blank" rel="noopener noreferrer">developer.x.com</a> with OAuth 1.0a Read and Write. Values are written to <code>openclaw.json</code> under the plugin <code>x</code> block.</p>
+      </div>
       <div class="card" id="startCard">
         <div class="grid">
           <div>
@@ -1724,6 +1753,11 @@ function wizardHtml(defaults) {
       const llmLoadingHintTextEl = document.getElementById("llmLoadingHintText");
       const startBtn = document.getElementById("start");
       const llmCardEl = document.getElementById("llmCard");
+      const xCardEl = document.getElementById("xCard");
+      const xConsumerKeyEl = document.getElementById("xConsumerKey");
+      const xConsumerSecretEl = document.getElementById("xConsumerSecret");
+      const xAccessTokenMainEl = document.getElementById("xAccessTokenMain");
+      const xAccessTokenMainSecretEl = document.getElementById("xAccessTokenMainSecret");
       const startCardEl = document.getElementById("startCard");
       const statusCardEl = document.getElementById("statusCard");
       const logsCardEl = document.getElementById("logsCard");
@@ -1744,6 +1778,10 @@ function wizardHtml(defaults) {
           && Boolean(llmProviderEl.value.trim())
           && Boolean(llmCredentialEl.value.trim())
           && Boolean(telegramTokenEl.value.trim())
+          && Boolean(xConsumerKeyEl.value.trim())
+          && Boolean(xConsumerSecretEl.value.trim())
+          && Boolean(xAccessTokenMainEl.value.trim())
+          && Boolean(xAccessTokenMainSecretEl.value.trim())
         );
       }
 
@@ -1864,6 +1902,7 @@ function wizardHtml(defaults) {
       function setCheckoutMode(enabled) {
         if (enabled) {
           llmCardEl.classList.add("hidden");
+          xCardEl.classList.add("hidden");
           startCardEl.classList.add("hidden");
           statusCardEl.classList.add("hidden");
           logsCardEl.classList.add("hidden");
@@ -1871,6 +1910,7 @@ function wizardHtml(defaults) {
           return;
         }
         llmCardEl.classList.remove("hidden");
+        xCardEl.classList.remove("hidden");
         startCardEl.classList.remove("hidden");
         statusCardEl.classList.remove("hidden");
         logsCardEl.classList.remove("hidden");
@@ -1895,7 +1935,11 @@ function wizardHtml(defaults) {
           llmModel: llmModelManualEl.checked ? llmModelEl.value.trim() : "",
           llmCredential: llmCredentialEl.value.trim(),
           apiKey: document.getElementById("apiKey").value.trim(),
-          telegramToken: document.getElementById("telegramToken").value.trim()
+          telegramToken: document.getElementById("telegramToken").value.trim(),
+          xConsumerKey: xConsumerKeyEl.value.trim(),
+          xConsumerSecret: xConsumerSecretEl.value.trim(),
+          xAccessTokenMain: xAccessTokenMainEl.value.trim(),
+          xAccessTokenMainSecret: xAccessTokenMainSecretEl.value.trim(),
         };
         if (!payload.llmProvider || !payload.llmCredential) {
           stateEl.textContent = "blocked";
@@ -1907,6 +1951,12 @@ function wizardHtml(defaults) {
           stateEl.textContent = "blocked";
           readyEl.textContent = "";
           manualEl.textContent = "Telegram bot token is required before starting installation.";
+          return;
+        }
+        if (!payload.xConsumerKey || !payload.xConsumerSecret || !payload.xAccessTokenMain || !payload.xAccessTokenMainSecret) {
+          stateEl.textContent = "blocked";
+          readyEl.textContent = "";
+          manualEl.textContent = "X (Twitter) consumer key, consumer secret, access token, and access token secret are required before starting installation.";
           return;
         }
 
@@ -2105,6 +2155,10 @@ function wizardHtml(defaults) {
       });
       llmCredentialEl.addEventListener("input", updateStartButtonState);
       telegramTokenEl.addEventListener("input", updateStartButtonState);
+      xConsumerKeyEl.addEventListener("input", updateStartButtonState);
+      xConsumerSecretEl.addEventListener("input", updateStartButtonState);
+      xAccessTokenMainEl.addEventListener("input", updateStartButtonState);
+      xAccessTokenMainSecretEl.addEventListener("input", updateStartButtonState);
       loadLlmCatalog();
       setPollInterval(1200);
       refresh();
@@ -2121,9 +2175,9 @@ async function cmdInstall(args) {
   }
 
   const defaults = parseInstallWizardArgs(args);
-  const { createInstallerStepEngine } = await import("./installer-step-engine.mjs");
+  const { createInstallerStepEngine, assertWizardXCredentials } = await import("./installer-step-engine.mjs");
   const modeConfig = {
-    pluginPackage: "solana-traderclaw-v1",
+    pluginPackage: "traderclaw-team-v1",
     pluginId: "solana-trader",
     cliName: "traderclaw",
     gatewayConfig: "gateway-v1.json5",
@@ -2226,6 +2280,30 @@ async function cmdInstall(args) {
       }
 
       const body = await parseJsonBody(req).catch(() => ({}));
+      const wizardOpts = {
+        mode: "light",
+        lane: defaults.lane,
+        llmProvider: body.llmProvider || defaults.llmProvider,
+        llmModel: body.llmModel || defaults.llmModel,
+        llmCredential: body.llmCredential || defaults.llmCredential,
+        apiKey: body.apiKey || defaults.apiKey,
+        orchestratorUrl: defaults.orchestratorUrl,
+        gatewayBaseUrl: defaults.gatewayBaseUrl,
+        gatewayToken: defaults.gatewayToken,
+        enableTelegram: true,
+        telegramToken: body.telegramToken || defaults.telegramToken,
+        autoInstallDeps: true,
+        xConsumerKey: body.xConsumerKey ?? defaults.xConsumerKey,
+        xConsumerSecret: body.xConsumerSecret ?? defaults.xConsumerSecret,
+        xAccessTokenMain: body.xAccessTokenMain ?? defaults.xAccessTokenMain,
+        xAccessTokenMainSecret: body.xAccessTokenMainSecret ?? defaults.xAccessTokenMainSecret,
+      };
+      const xErr = assertWizardXCredentials(modeConfig, wizardOpts);
+      if (xErr) {
+        respondJson(400, { ok: false, error: xErr });
+        return;
+      }
+
       running = true;
       runtime.status = "running";
       runtime.logs = [];
@@ -2250,6 +2328,10 @@ async function cmdInstall(args) {
           enableTelegram: true,
           telegramToken: body.telegramToken || defaults.telegramToken,
           autoInstallDeps: true,
+          xConsumerKey: wizardOpts.xConsumerKey,
+          xConsumerSecret: wizardOpts.xConsumerSecret,
+          xAccessTokenMain: wizardOpts.xAccessTokenMain,
+          xAccessTokenMainSecret: wizardOpts.xAccessTokenMainSecret,
         },
         {
           onStepEvent: (evt) => {

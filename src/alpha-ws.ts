@@ -261,6 +261,7 @@ export class AlphaStreamManager {
           code === "ACCESS_TOKEN_EXPIRED"
         ) {
           this.authenticated = false;
+          // connect() on reconnect awaits getAccessToken(), which refreshes the orchestrator session when needed.
           this.log("warn", "Auth error — closing and will reconnect with fresh token");
           if (this.ws) this.ws.close();
         }

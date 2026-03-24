@@ -35,14 +35,14 @@ Official docs:
 Choose one:
 
 ```bash
-npm install -g solana-traderclaw-v1@1.0.6
+npm install -g solana-traderclaw@1.0.18
 traderclaw --version
 ```
 
 or:
 
 ```bash
-openclaw plugins install solana-traderclaw-v1@1.0.6
+openclaw plugins install solana-traderclaw@1.0.18
 ```
 
 Restart gateway:

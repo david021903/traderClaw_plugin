@@ -12,6 +12,15 @@ export interface SessionTokens {
   };
 }
 
+export interface SignupResult {
+  ok: boolean;
+  externalUserId: string;
+  tier: string;
+  scopes: string[];
+  apiKey: string;
+  createdAt: string;
+}
+
 export interface ChallengeResult {
   ok: boolean;
   walletProofRequired: boolean;
@@ -25,6 +34,15 @@ export interface ChallengeResult {
 const TRADERCLAW_SESSION_TROUBLESHOOTING =
   "https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out";
 
+/** Emitted whenever access/refresh tokens change (refresh, startSession, etc.). */
+export interface RotatedSessionTokens {
+  refreshToken: string;
+  accessToken: string;
+  /** Unix epoch milliseconds when the access token expires. */
+  accessTokenExpiresAt: number;
+  walletPublicKey?: string;
+}
+
 export interface SessionManagerConfig {
   baseUrl: string;
   apiKey: string;
@@ -33,7 +51,10 @@ export interface SessionManagerConfig {
   walletPrivateKeyProvider?: () => string | undefined | Promise<string | undefined>;
   clientLabel?: string;
   timeout?: number;
-  onTokensRotated?: (tokens: { refreshToken: string; walletPublicKey?: string }) => void;
+  /** If still valid, avoids an immediate /api/session/refresh on cold start. */
+  initialAccessToken?: string;
+  initialAccessTokenExpiresAt?: number;
+  onTokensRotated?: (tokens: RotatedSessionTokens) => void;
   logger?: { info: (msg: string) => void; warn: (msg: string) => void; error: (msg: string) => void };
 }
 
@@ -179,7 +200,7 @@ export class SessionManager {
   private sessionId: string | null = null;
   private tier: string | null = null;
   private scopes: string[] = [];
-  private onTokensRotated?: (tokens: { refreshToken: string; walletPublicKey?: string }) => void;
+  private onTokensRotated?: (tokens: RotatedSessionTokens) => void;
   private log: { info: (msg: string) => void; warn: (msg: string) => void; error: (msg: string) => void };
   private refreshInFlight: Promise<void> | null = null;
 
@@ -193,6 +214,31 @@ export class SessionManager {
     this.timeout = config.timeout || 15000;
     this.onTokensRotated = config.onTokensRotated;
     this.log = config.logger || { info: console.log, warn: console.warn, error: console.error };
+
+    const initTok = config.initialAccessToken;
+    const initExp = config.initialAccessTokenExpiresAt;
+    const skewMs = 5000;
+    if (initTok && initExp != null && Date.now() < initExp - skewMs) {
+      this.accessToken = initTok;
+      this.accessTokenExpiresAt = initExp;
+    }
+  }
+
+  async signup(externalUserId: string): Promise<SignupResult> {
+    const res = await rawFetch(
+      `${this.baseUrl}/api/auth/signup`,
+      "POST",
+      { externalUserId },
+      undefined,
+      this.timeout,
+    );
+
+    if (!res.ok) {
+      throw new Error(`Signup failed (HTTP ${res.status}): ${JSON.stringify(res.data)}`);
+    }
+
+    this.apiKey = res.data.apiKey;
+    return res.data as SignupResult;
   }
 
   async requestChallenge(): Promise<ChallengeResult> {
@@ -361,7 +407,9 @@ export class SessionManager {
     }
 
     if (!this.accessToken) {
-      throw new Error("Failed to obtain access token after refresh.");
+      throw new Error(
+        `Session expired and could not be refreshed. Re-authentication required. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`,
+      );
     }
 
     return this.accessToken;
@@ -426,6 +474,8 @@ export class SessionManager {
     if (this.onTokensRotated) {
       this.onTokensRotated({
         refreshToken: tokens.refreshToken,
+        accessToken: tokens.accessToken,
+        accessTokenExpiresAt: this.accessTokenExpiresAt,
         walletPublicKey: this.walletPublicKey || undefined,
       });
     }

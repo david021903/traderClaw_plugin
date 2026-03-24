@@ -1,4 +1,5 @@
 // src/session-manager.ts
+var TRADERCLAW_SESSION_TROUBLESHOOTING = "https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out";
 var BS58_CHARS = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 function b58Decode(str) {
   let num = BigInt(0);
@@ -132,7 +133,7 @@ var SessionManager = class {
   accessToken = null;
   refreshTokenValue = null;
   walletPublicKey = null;
-  walletPrivateKey = null;
+  walletPrivateKeyProvider;
   clientLabel;
   timeout;
   accessTokenExpiresAt = 0;
@@ -147,11 +148,18 @@ var SessionManager = class {
     this.apiKey = config.apiKey;
     this.refreshTokenValue = config.refreshToken || null;
     this.walletPublicKey = config.walletPublicKey || null;
-    this.walletPrivateKey = config.walletPrivateKey || null;
+    this.walletPrivateKeyProvider = config.walletPrivateKeyProvider;
     this.clientLabel = config.clientLabel || "openclaw-plugin-runtime";
     this.timeout = config.timeout || 15e3;
     this.onTokensRotated = config.onTokensRotated;
     this.log = config.logger || { info: console.log, warn: console.warn, error: console.error };
+    const initTok = config.initialAccessToken;
+    const initExp = config.initialAccessTokenExpiresAt;
+    const skewMs = 5e3;
+    if (initTok && initExp != null && Date.now() < initExp - skewMs) {
+      this.accessToken = initTok;
+      this.accessTokenExpiresAt = initExp;
+    }
   }
   async signup(externalUserId) {
     const res = await rawFetch(
@@ -262,21 +270,24 @@ var SessionManager = class {
       }
     }
     if (!this.apiKey) {
-      throw new Error("No apiKey configured. Run signup or provide an apiKey.");
+      throw new Error(
+        "No apiKey configured. On this machine run: traderclaw setup --signup (or traderclaw signup) for a new account, or add an API key via traderclaw setup. The agent cannot create accounts or change credentials."
+      );
     }
     this.log.info("[session] Starting challenge flow...");
     const challenge = await this.requestChallenge();
     let walletPubKey;
     let walletSig;
     if (challenge.walletProofRequired && challenge.challenge) {
-      if (!this.walletPrivateKey) {
+      const walletPrivateKey = (await this.walletPrivateKeyProvider?.())?.trim();
+      if (!walletPrivateKey) {
         throw new Error(
-          "Wallet proof required but no walletPrivateKey configured. This account already has a wallet \u2014 you must provide the wallet private key to prove ownership. Set walletPrivateKey in plugin config or run: openclaw-trader config set walletPrivateKey <base58_key>"
+          `Wallet proof required but no walletPrivateKey configured. This account already has a wallet \u2014 set TRADERCLAW_WALLET_PRIVATE_KEY in the OpenClaw gateway process environment (e.g. systemd), not only in an SSH shell, then restart the gateway. The key is used only for local signing and is never sent to the orchestrator. Do not store private keys in openclaw.json. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`
         );
       }
       walletPubKey = challenge.walletPublicKey || this.walletPublicKey || void 0;
       this.log.info("[session] Signing wallet challenge locally...");
-      walletSig = await signChallengeAsync(challenge.challenge, this.walletPrivateKey);
+      walletSig = await signChallengeAsync(challenge.challenge, walletPrivateKey);
     }
     const tokens = await this.startSession(challenge.challengeId, walletPubKey, walletSig);
     this.log.info(`[session] Session established. ID: ${this.sessionId}, Tier: ${this.tier}`);
@@ -285,7 +296,7 @@ var SessionManager = class {
     }
   }
   async getAccessToken() {
-    if (this.accessToken && Date.now() < this.accessTokenExpiresAt - 3e4) {
+    if (this.accessToken && Date.now() < this.accessTokenExpiresAt - 12e4) {
       return this.accessToken;
     }
     if (!this.refreshInFlight) {
@@ -297,7 +308,9 @@ var SessionManager = class {
       this.refreshInFlight = null;
     }
     if (!this.accessToken) {
-      throw new Error("Failed to obtain access token after refresh.");
+      throw new Error(
+        `Session expired and could not be refreshed. Re-authentication required. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`
+      );
     }
     return this.accessToken;
   }
@@ -313,7 +326,9 @@ var SessionManager = class {
       this.refreshInFlight = null;
     }
     if (!this.accessToken) {
-      throw new Error("Session expired and could not be refreshed. Re-authentication required.");
+      throw new Error(
+        `Session expired and could not be refreshed. Re-authentication required. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`
+      );
     }
     return this.accessToken;
   }
@@ -347,6 +362,8 @@ var SessionManager = class {
     if (this.onTokensRotated) {
       this.onTokensRotated({
         refreshToken: tokens.refreshToken,
+        accessToken: tokens.accessToken,
+        accessTokenExpiresAt: this.accessTokenExpiresAt,
         walletPublicKey: this.walletPublicKey || void 0
       });
     }
