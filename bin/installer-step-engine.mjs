@@ -203,6 +203,29 @@ function gatewayModeUnsetRemediation() {
   ].join("\n");
 }
 
+function gatewayConfigValidationRemediation() {
+  return [
+    "OpenClaw could not load or validate ~/.openclaw/openclaw.json after plugins are enabled (often an Ajv/schema compile error in the OpenClaw CLI, not invalid JSON syntax).",
+    "The first `openclaw config validate` in this installer runs before plugins install; validation must be re-run once plugin schemas are registered — that is why this can appear only at gateway.",
+    "On the VPS, try in order:",
+    "1) openclaw --version",
+    "2) npm install -g openclaw@latest",
+    "3) openclaw config validate",
+    "4) openclaw plugins doctor",
+    "5) cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.bak.$(date +%s) || true",
+    "If it still fails, report the OpenClaw version plus output of steps 3–4 to OpenClaw/TraderClaw support (redact secrets).",
+  ].join("\n");
+}
+
+function isOpenClawConfigSchemaFailure(text) {
+  const t = String(text || "").toLowerCase();
+  return (
+    t.includes("ajv implementation")
+    || t.includes("validatejsonschemavalue")
+    || (t.includes("failed to read config") && t.includes("ajv"))
+  );
+}
+
 function runCommandWithEvents(cmd, args = [], opts = {}) {
   return new Promise((resolve, reject) => {
     const { onEvent, ...spawnOpts } = opts;
@@ -1114,9 +1137,10 @@ function resolveLlmModelSelection(provider, requestedModel) {
 }
 
 /**
- * OpenClaw 2026+ validates `agents.defaults` with Zod/Ajv: if `defaults` exists it must include
- * `heartbeat` and `model` objects. `openclaw plugins install/enable` can merge config and drop
- * these keys, which surfaces as obscure stack errors (e.g. "ajv implementation error") on the next CLI call.
+ * OpenClaw 2026+ expects `agents.defaults.heartbeat` as an object when `defaults` exists; plugin merges
+ * sometimes drop it. We only add `heartbeat: {}` here — do NOT add `model: {}` when `model` is absent:
+ * many schemas require `model.primary` whenever `model` is present; an empty model object caused Ajv
+ * failures after hardening (regression for installs where the plugin stripped `model` but left defaults).
  */
 function ensureAgentsDefaultsSchemaCompat(config) {
   if (!config || typeof config !== "object") return;
@@ -1125,8 +1149,9 @@ function ensureAgentsDefaultsSchemaCompat(config) {
   if (!config.agents.defaults.heartbeat || typeof config.agents.defaults.heartbeat !== "object") {
     config.agents.defaults.heartbeat = {};
   }
-  if (!config.agents.defaults.model || typeof config.agents.defaults.model !== "object") {
-    config.agents.defaults.model = {};
+  const m = config.agents.defaults.model;
+  if (m !== undefined && m !== null && (typeof m !== "object" || Array.isArray(m))) {
+    delete config.agents.defaults.model;
   }
 }
 
@@ -1189,6 +1214,9 @@ function configureOpenClawLlmProvider({ provider, model, credential }, configPat
   if (!config.agents) config.agents = {};
   if (!config.agents.defaults) config.agents.defaults = {};
   ensureAgentsDefaultsSchemaCompat(config);
+  if (!config.agents.defaults.model || typeof config.agents.defaults.model !== "object") {
+    config.agents.defaults.model = {};
+  }
   config.agents.defaults.model.primary = model;
 
   mkdirSync(CONFIG_DIR, { recursive: true });
@@ -1643,6 +1671,19 @@ export class InstallerStepEngine {
         await this.runStep("tailscale_up", "Connecting Tailscale", async () => this.runTailscaleUp());
       }
       if (!this.options.skipGatewayBootstrap) {
+        await this.runStep("openclaw_config_validate", "Validating OpenClaw config (with plugins)", async () => {
+          normalizeOpenClawConfigFileShape(CONFIG_FILE);
+          try {
+            await this.runWithPrivilegeGuidance("openclaw_config_validate", "openclaw", ["config", "validate"]);
+          } catch (err) {
+            const blob = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`;
+            if (isOpenClawConfigSchemaFailure(blob)) {
+              throw new Error(gatewayConfigValidationRemediation());
+            }
+            throw err;
+          }
+          return { ok: true };
+        });
         await this.runStep("gateway_bootstrap", "Starting OpenClaw gateway and Funnel", async () => {
           try {
             normalizeOpenClawConfigFileShape(CONFIG_FILE);
@@ -1666,6 +1707,9 @@ export class InstallerStepEngine {
                 throw new Error(gatewayModeUnsetRemediation());
               }
               throw new Error(gatewayTimeoutRemediation());
+            }
+            if (isOpenClawConfigSchemaFailure(text)) {
+              throw new Error(gatewayConfigValidationRemediation());
             }
             throw err;
           }
