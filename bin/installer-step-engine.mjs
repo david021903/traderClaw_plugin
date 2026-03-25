@@ -231,6 +231,27 @@ function isNpmGlobalBinConflict(err, cliName) {
   );
 }
 
+/** True when spec is an on-disk package directory (global npm path or git checkout), not a registry name. */
+function isNpmFilesystemPackageSpec(spec) {
+  if (typeof spec !== "string" || !spec.length) return false;
+  if (spec.startsWith("/")) return true;
+  return process.platform === "win32" && /^[A-Za-z]:[\\/]/.test(spec);
+}
+
+/**
+ * Args for `npm install -g …`. Use explicit registry for registry specs so npm never treats cwd/temp as `file:solana-traderclaw`.
+ * IMPORTANT: run with `{ shell: false }` — `spawn(..., { shell: true })` can drop argv on Unix and npm then mis-resolves the package name.
+ */
+function npmGlobalInstallArgs(spec, { force = false } = {}) {
+  const args = ["install", "-g"];
+  if (force) args.push("--force");
+  if (!isNpmFilesystemPackageSpec(spec)) {
+    args.push("--registry", "https://registry.npmjs.org/");
+  }
+  args.push(spec);
+  return args;
+}
+
 async function installPlugin(modeConfig, onEvent) {
   const spec = resolvePluginInstallSpec(modeConfig);
   const isLocalPluginRoot =
@@ -244,17 +265,17 @@ async function installPlugin(modeConfig, onEvent) {
       urls: [],
     });
   }
-  // npm resolves bare package names against process cwd; a folder named solana-traderclaw under /root becomes file:solana-traderclaw and breaks global install.
   const npmCwd = tmpdir();
   if (typeof onEvent === "function") {
     onEvent({
       type: "stdout",
-      text: `Running npm global install with cwd=${npmCwd} (avoids shadowing by ./solana-traderclaw in the wizard shell).\n`,
+      text: `Running npm global install with cwd=${npmCwd}, shell=false, args=${JSON.stringify(npmGlobalInstallArgs(spec))}\n`,
       urls: [],
     });
   }
+  const npmOpts = { onEvent, cwd: npmCwd, shell: false };
   try {
-    await runCommandWithEvents("npm", ["install", "-g", spec], { onEvent, cwd: npmCwd });
+    await runCommandWithEvents("npm", npmGlobalInstallArgs(spec), npmOpts);
     return { installed: true, available: commandExists(modeConfig.cliName), forced: false };
   } catch (err) {
     if (!isNpmGlobalBinConflict(err, modeConfig.cliName)) throw err;
@@ -265,7 +286,7 @@ async function installPlugin(modeConfig, onEvent) {
         urls: [],
       });
     }
-    await runCommandWithEvents("npm", ["install", "-g", "--force", spec], { onEvent, cwd: npmCwd });
+    await runCommandWithEvents("npm", npmGlobalInstallArgs(spec, { force: true }), npmOpts);
     return { installed: true, available: commandExists(modeConfig.cliName), forced: true };
   }
 }
