@@ -985,6 +985,43 @@ async function verifyXCredentials(consumerKey, consumerSecret, accessToken, acce
   return { ok: true, userId: data?.data?.id, username: data?.data?.username };
 }
 
+/** After OAuth verify, persist X user id + handle from GET /2/users/me into plugin config (no user typing). */
+function persistXProfileIdentities(configPath, modeConfig, identities) {
+  if (!Array.isArray(identities) || identities.length === 0) return { written: 0 };
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    return { written: 0 };
+  }
+  const entry = config?.plugins?.entries?.[modeConfig.pluginId];
+  if (!entry?.config?.x?.profiles || typeof entry.config.x.profiles !== "object") return { written: 0 };
+
+  let profilesTouched = 0;
+  for (const row of identities) {
+    const agentId = row?.agentId;
+    const userId = row?.userId;
+    const username = row?.username;
+    if (typeof agentId !== "string" || !agentId.length) continue;
+    const p = entry.config.x.profiles[agentId];
+    if (!p || typeof p !== "object") continue;
+    let touched = false;
+    if (userId != null && String(userId).length > 0) {
+      p.userId = String(userId);
+      touched = true;
+    }
+    if (username != null && String(username).length > 0) {
+      p.username = String(username);
+      touched = true;
+    }
+    if (touched) profilesTouched++;
+  }
+  if (profilesTouched === 0) return { written: 0 };
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  return { written: profilesTouched };
+}
+
 function listProviderModels(provider) {
   const cmd = `openclaw models list --all --provider ${shellQuote(provider)} --json`;
   const raw = getCommandOutput(cmd);
@@ -1672,6 +1709,7 @@ export class InstallerStepEngine {
         }
         const { consumerKey, consumerSecret } = getConsumerKeysFromWizard(this.options);
         const verified = [];
+        const identitiesToPersist = [];
         for (const agentId of result.agentIds) {
           const { at, ats } = getAccessPairForAgent(this.options, agentId);
           if (at && ats) {
@@ -1680,12 +1718,19 @@ export class InstallerStepEngine {
               if (check.ok) {
                 this.emitLog("x_credentials", "info", `Verified X profile '${agentId}': @${check.username} (${check.userId})`);
                 verified.push({ agentId, username: check.username, userId: check.userId });
+                identitiesToPersist.push({ agentId, userId: check.userId, username: check.username });
               } else {
                 this.emitLog("x_credentials", "warn", `X credential verification failed for '${agentId}': HTTP ${check.status}`);
               }
             } catch (err) {
               this.emitLog("x_credentials", "warn", `X credential verification error for '${agentId}': ${err?.message || String(err)}`);
             }
+          }
+        }
+        if (identitiesToPersist.length > 0) {
+          const persisted = persistXProfileIdentities(CONFIG_FILE, this.modeConfig, identitiesToPersist);
+          if (persisted.written > 0) {
+            this.emitLog("x_credentials", "info", `Saved X user id and username to openclaw.json for ${persisted.written} profile(s) (from API, not manual entry).`);
           }
         }
         return { ...result, verified };
