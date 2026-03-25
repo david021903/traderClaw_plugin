@@ -436,6 +436,7 @@ function seedPluginConfig(modeConfig, orchestratorUrl, configPath = CONFIG_FILE)
   // Do not set plugins.allow here: OpenClaw validates allow[] against the plugin registry, and
   // the id is not registered until after `openclaw plugins install`. Pre-seeding allow caused:
   // "plugins.allow: plugin not found: <id>".
+  ensureAgentsDefaultsSchemaCompat(config);
 
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
@@ -576,6 +577,7 @@ function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
   );
   allowSet.add(modeConfig.pluginId);
   config.plugins.allow = [...allowSet];
+  ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
@@ -1082,6 +1084,40 @@ function resolveLlmModelSelection(provider, requestedModel) {
   return { model: fallbackModelForProvider(provider), source: "fallback_guess", availableModels, warnings };
 }
 
+/**
+ * OpenClaw 2026+ validates `agents.defaults` with Zod/Ajv: if `defaults` exists it must include
+ * `heartbeat` and `model` objects. `openclaw plugins install/enable` can merge config and drop
+ * these keys, which surfaces as obscure stack errors (e.g. "ajv implementation error") on the next CLI call.
+ */
+function ensureAgentsDefaultsSchemaCompat(config) {
+  if (!config || typeof config !== "object") return;
+  if (!config.agents || typeof config.agents !== "object") return;
+  if (!config.agents.defaults || typeof config.agents.defaults !== "object") return;
+  if (!config.agents.defaults.heartbeat || typeof config.agents.defaults.heartbeat !== "object") {
+    config.agents.defaults.heartbeat = {};
+  }
+  if (!config.agents.defaults.model || typeof config.agents.defaults.model !== "object") {
+    config.agents.defaults.model = {};
+  }
+}
+
+/** Re-read config from disk and re-apply defaults shape before gateway/plugin commands that validate the file. */
+function normalizeOpenClawConfigFileShape(configPath = CONFIG_FILE) {
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    return;
+  }
+  ensureAgentsDefaultsSchemaCompat(config);
+  try {
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  } catch {
+    // best effort
+  }
+}
+
 function configureOpenClawLlmProvider({ provider, model, credential }, configPath = CONFIG_FILE) {
   if (!provider || !credential) {
     throw new Error("LLM provider and credential are required.");
@@ -1123,15 +1159,7 @@ function configureOpenClawLlmProvider({ provider, model, credential }, configPat
 
   if (!config.agents) config.agents = {};
   if (!config.agents.defaults) config.agents.defaults = {};
-  // OpenClaw 2026+ Zod schema requires agents.defaults.heartbeat whenever defaults exists
-  // (see OpenClaw AgentDefaultsSchema). Omitting it makes openclaw plugins install fail at
-  // writeConfigFile → validateConfigObjectRaw with a stack-only error in the UI.
-  if (!config.agents.defaults.heartbeat || typeof config.agents.defaults.heartbeat !== "object") {
-    config.agents.defaults.heartbeat = {};
-  }
-  if (!config.agents.defaults.model || typeof config.agents.defaults.model !== "object") {
-    config.agents.defaults.model = {};
-  }
+  ensureAgentsDefaultsSchemaCompat(config);
   config.agents.defaults.model.primary = model;
 
   mkdirSync(CONFIG_DIR, { recursive: true });
@@ -1587,6 +1615,7 @@ export class InstallerStepEngine {
       if (!this.options.skipGatewayBootstrap) {
         await this.runStep("gateway_bootstrap", "Starting OpenClaw gateway and Funnel", async () => {
           try {
+            normalizeOpenClawConfigFileShape(CONFIG_FILE);
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "install"]);
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "restart"]);
             return this.runFunnel();
