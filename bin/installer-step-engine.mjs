@@ -1,6 +1,6 @@
 import { execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
@@ -13,14 +13,46 @@ const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 /** Directory containing this package when running from a git checkout or global npm install. */
 const PLUGIN_PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-function resolvePluginInstallSpec(modeConfig) {
-  const manifest = join(PLUGIN_PACKAGE_ROOT, "openclaw.plugin.json");
-  const pkgJson = join(PLUGIN_PACKAGE_ROOT, "package.json");
-  if (existsSync(manifest) && existsSync(pkgJson)) {
-    return PLUGIN_PACKAGE_ROOT;
+function readPluginPackageVersion() {
+  const pkgJsonPath = join(PLUGIN_PACKAGE_ROOT, "package.json");
+  if (!existsSync(pkgJsonPath)) return null;
+  try {
+    const pkg = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
+    return typeof pkg.version === "string" && pkg.version.trim().length ? pkg.version.trim() : null;
+  } catch {
+    return null;
   }
-  // Use an explicit registry range so npm does not treat a same-named folder in cwd (e.g. /root/solana-traderclaw) as the install source.
+}
+
+/**
+ * Spec for `npm install -g` and `openclaw plugins install`.
+ * Prefer explicit registry coordinates (`package@version`) so npm never resolves a bare name or `file:`
+ * relative to cwd (e.g. /root when TMPDIR or shadow folders break resolution).
+ * Local directory install is opt-in for dev/offline: TRADERCLAW_INSTALLER_USE_LOCAL_PACKAGE=1.
+ */
+function resolveRegistryPluginInstallSpec(modeConfig) {
+  if (process.env.TRADERCLAW_INSTALLER_USE_LOCAL_PACKAGE === "1") {
+    const manifest = join(PLUGIN_PACKAGE_ROOT, "openclaw.plugin.json");
+    const pkgJson = join(PLUGIN_PACKAGE_ROOT, "package.json");
+    if (existsSync(manifest) && existsSync(pkgJson)) {
+      return PLUGIN_PACKAGE_ROOT;
+    }
+  }
+  const v = readPluginPackageVersion();
+  if (v) return `${modeConfig.pluginPackage}@${v}`;
   return `${modeConfig.pluginPackage}@latest`;
+}
+
+/** Empty per-invocation cwd for npm global installs — avoids TMPDIR=/root and stray ./solana-traderclaw shadowing. */
+function getNpmGlobalInstallCwd() {
+  if (process.platform === "win32") {
+    return mkdtempSync(join(tmpdir(), "tc-npm-"));
+  }
+  try {
+    return mkdtempSync(join("/tmp", "tc-npm-"));
+  } catch {
+    return mkdtempSync(join(tmpdir(), "tc-npm-"));
+  }
 }
 
 /** Older `plugins.entries` keys / npm-era ids to merge orchestrator URL for. */
@@ -172,16 +204,17 @@ function gatewayModeUnsetRemediation() {
 
 function runCommandWithEvents(cmd, args = [], opts = {}) {
   return new Promise((resolve, reject) => {
+    const { onEvent, ...spawnOpts } = opts;
     const child = spawn(cmd, args, {
       stdio: "pipe",
       shell: true,
-      ...opts,
+      ...spawnOpts,
     });
 
     let stdout = "";
     let stderr = "";
-    const onEvent = typeof opts.onEvent === "function" ? opts.onEvent : null;
-    const emit = (event) => onEvent && onEvent(event);
+    const emitFn = typeof onEvent === "function" ? onEvent : null;
+    const emit = (event) => emitFn && emitFn(event);
 
     child.stdout?.on("data", (d) => {
       const text = d.toString();
@@ -253,7 +286,7 @@ function npmGlobalInstallArgs(spec, { force = false } = {}) {
 }
 
 async function installPlugin(modeConfig, onEvent) {
-  const spec = resolvePluginInstallSpec(modeConfig);
+  const spec = resolveRegistryPluginInstallSpec(modeConfig);
   const isLocalPluginRoot =
     typeof spec === "string" &&
     existsSync(join(spec, "openclaw.plugin.json")) &&
@@ -265,7 +298,7 @@ async function installPlugin(modeConfig, onEvent) {
       urls: [],
     });
   }
-  const npmCwd = tmpdir();
+  const npmCwd = getNpmGlobalInstallCwd();
   if (typeof onEvent === "function") {
     onEvent({
       type: "stdout",
@@ -322,7 +355,7 @@ async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorU
 
   seedPluginConfig(modeConfig, orchestratorUrl || "https://api.traderclaw.ai");
 
-  const pluginInstallSpec = resolvePluginInstallSpec(modeConfig);
+  const pluginInstallSpec = resolveRegistryPluginInstallSpec(modeConfig);
   let recoveredExistingDir = null;
   try {
     await runCommandWithEvents("openclaw", ["plugins", "install", pluginInstallSpec], { onEvent });
@@ -781,8 +814,7 @@ function deployGatewayConfig(modeConfig) {
   const destFile = join(gatewayDir, modeConfig.gatewayConfig);
   const npmRoot = getCommandOutput("npm root -g");
   if (!npmRoot) return { deployed: false, dest: destFile };
-  const spec = resolvePluginInstallSpec(modeConfig);
-  const src = join(npmRoot, spec, "config", modeConfig.gatewayConfig);
+  const src = join(npmRoot, modeConfig.pluginPackage, "config", modeConfig.gatewayConfig);
   if (!existsSync(src)) return { deployed: false, dest: destFile };
   writeFileSync(destFile, readFileSync(src));
   return { deployed: true, source: src, dest: destFile };
@@ -826,8 +858,7 @@ export function resolveAgentWorkspaceDir(configPath = CONFIG_FILE) {
 export function deployWorkspaceHeartbeat(modeConfig) {
   const npmRoot = getCommandOutput("npm root -g");
   if (!npmRoot) return { deployed: false, reason: "npm_root_g_failed" };
-  const spec = resolvePluginInstallSpec(modeConfig);
-  const src = join(npmRoot, spec, "skills", "solana-trader", "HEARTBEAT.md");
+  const src = join(npmRoot, modeConfig.pluginPackage, "skills", "solana-trader", "HEARTBEAT.md");
   if (!existsSync(src)) return { deployed: false, reason: "source_missing", src };
 
   const workspaceDir = resolveAgentWorkspaceDir(CONFIG_FILE);
