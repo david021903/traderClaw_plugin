@@ -19,7 +19,8 @@ function resolvePluginInstallSpec(modeConfig) {
   if (existsSync(manifest) && existsSync(pkgJson)) {
     return PLUGIN_PACKAGE_ROOT;
   }
-  return modeConfig.pluginPackage;
+  // Use an explicit registry range so npm does not treat a same-named folder in cwd (e.g. /root/solana-traderclaw) as the install source.
+  return `${modeConfig.pluginPackage}@latest`;
 }
 
 /** Older `plugins.entries` keys / npm-era ids to merge orchestrator URL for. */
@@ -232,7 +233,11 @@ function isNpmGlobalBinConflict(err, cliName) {
 
 async function installPlugin(modeConfig, onEvent) {
   const spec = resolvePluginInstallSpec(modeConfig);
-  if (spec !== modeConfig.pluginPackage && typeof onEvent === "function") {
+  const isLocalPluginRoot =
+    typeof spec === "string" &&
+    existsSync(join(spec, "openclaw.plugin.json")) &&
+    existsSync(join(spec, "package.json"));
+  if (isLocalPluginRoot && typeof onEvent === "function") {
     onEvent({
       type: "stdout",
       text: `Installing TraderClaw CLI from local package path (not on npm registry): ${spec}\n`,

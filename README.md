@@ -554,6 +554,9 @@ I'll monitor this position and review after exit.
 - Run `traderclaw setup` to create or select a wallet
 - Verify the wallet ID: `traderclaw config show`
 
+**Wizard (`traderclaw install --wizard`) fails on `install_plugin_package` with `ENOENT` / `/root/solana-traderclaw/package.json` / `file:solana-traderclaw`:**
+- npm is picking up a **local folder** named `solana-traderclaw` in your shell cwd (often `/root`) instead of the registry. Remove or rename an empty/broken `~/solana-traderclaw` directory, then run `npm install -g solana-traderclaw@latest` and start the wizard again. Current installers use `solana-traderclaw@latest` for the registry fallback to avoid this ambiguity.
+
 **Heartbeat not sending messages to Telegram:**
 - **Fresh `traderclaw setup`:** the installer runs `configureGatewayScheduling`, which sets a custom `heartbeat.prompt` on the `main` agent (no `HEARTBEAT_OK` escape). You only need the manual `openclaw config set` command below if you are on an older install or overwrote `agents.list`.
 - **`HEARTBEAT.md` must live in the agent workspace root** (default `~/.openclaw/workspace/HEARTBEAT.md`, next to `AGENTS.md`). A copy under `workspace/.openclaw/` or only inside the plugin package is **not** loaded as the heartbeat checklist. Copy from `skills/solana-trader/HEARTBEAT.md` in the installed package if needed. See [OpenClaw agent workspace](https://docs.openclaw.ai/concepts/agent-workspace).
