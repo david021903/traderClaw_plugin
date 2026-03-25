@@ -1,7 +1,7 @@
 import { execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
@@ -244,8 +244,17 @@ async function installPlugin(modeConfig, onEvent) {
       urls: [],
     });
   }
+  // npm resolves bare package names against process cwd; a folder named solana-traderclaw under /root becomes file:solana-traderclaw and breaks global install.
+  const npmCwd = tmpdir();
+  if (typeof onEvent === "function") {
+    onEvent({
+      type: "stdout",
+      text: `Running npm global install with cwd=${npmCwd} (avoids shadowing by ./solana-traderclaw in the wizard shell).\n`,
+      urls: [],
+    });
+  }
   try {
-    await runCommandWithEvents("npm", ["install", "-g", spec], { onEvent });
+    await runCommandWithEvents("npm", ["install", "-g", spec], { onEvent, cwd: npmCwd });
     return { installed: true, available: commandExists(modeConfig.cliName), forced: false };
   } catch (err) {
     if (!isNpmGlobalBinConflict(err, modeConfig.cliName)) throw err;
@@ -256,7 +265,7 @@ async function installPlugin(modeConfig, onEvent) {
         urls: [],
       });
     }
-    await runCommandWithEvents("npm", ["install", "-g", "--force", spec], { onEvent });
+    await runCommandWithEvents("npm", ["install", "-g", "--force", spec], { onEvent, cwd: npmCwd });
     return { installed: true, available: commandExists(modeConfig.cliName), forced: true };
   }
 }
