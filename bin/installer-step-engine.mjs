@@ -512,6 +512,65 @@ function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
+/**
+ * Six managed cron jobs with prescriptive tool chains (VPS report 2026-03-24).
+ * Replaces vague one-line templates so the agent actually invokes tools.
+ * @param {string} agentId
+ * @returns {Array<{ id: string, schedule: string, agentId: string, message: string, enabled: boolean }>}
+ */
+function traderCronPrescriptiveJobs(agentId) {
+  return [
+    {
+      id: "alpha-scan",
+      schedule: "0 * * * *",
+      agentId,
+      message:
+        "CRON_JOB: alpha_scan. You are running the hourly alpha scan. Do these steps in order: 1) Call solana_scan_launches to get the latest token launches. 2) For each token with volume > $20K and market cap > $50K, call solana_token_snapshot to get full stats. 3) Call solana_token_risk for any token that passes the snapshot check. 4) If a token passes all filters (risk score acceptable, liquidity sufficient, holder distribution healthy), call solana_token_holders and solana_token_flows for deep analysis. 5) Score qualifying tokens using your strategy weights from solana_strategy_state. 6) If any token scores above your entry threshold, execute via solana_trade with proper position sizing. 7) Call solana_daily_log with a summary of what you scanned, how many tokens passed each filter stage, and any trades executed. Do NOT just describe what you would do — actually call the tools.",
+      enabled: true,
+    },
+    {
+      id: "dead-money-sweep",
+      schedule: "0 */2 * * *",
+      agentId,
+      message:
+        "CRON_JOB: dead_money_sweep. You are running the dead money sweep. Do these steps: 1) Call solana_state_load to get all open positions. 2) For each open position, call solana_token_snapshot to get current price and volume. 3) Identify dead money: positions where price has not moved >5% in either direction for 4+ hours, OR volume has dropped below $5K, OR the token is trending toward zero with no recovery signals. 4) For any dead money position, execute an exit via solana_trade (sell). 5) Call solana_daily_log with what you found and any exits executed. Do NOT just list positions — actually check each one and act on dead money.",
+      enabled: true,
+    },
+    {
+      id: "source-reputation-recalc",
+      schedule: "0 */3 * * *",
+      agentId,
+      message:
+        "CRON_JOB: source_reputation_recalc. You are recalculating alpha source reputation scores. Do these steps: 1) Call solana_alpha_history to get recent signal history (last 7 days). 2) Call solana_alpha_sources to get current per-source performance stats. 3) For each source, calculate: win rate (signals that led to profitable trades vs total signals), average return, signal-to-noise ratio (quality signals vs spam). 4) Call solana_memory_search for 'source_reputation' to get existing reputation data. 5) Update reputation scores: call solana_memory_write with category 'source_reputation' for each source with updated stats. 6) Flag any source whose win rate dropped below 30% or whose signals consistently fail filters. 7) Call solana_daily_log with reputation changes. Actually compute and write — do not just describe the process.",
+      enabled: true,
+    },
+    {
+      id: "meta-rotation-analysis",
+      schedule: "30 */3 * * *",
+      agentId,
+      message:
+        "CRON_JOB: meta_rotation_analysis. You are analyzing narrative/meta rotation in the memecoin market. Do these steps: 1) Call x_search_tweets with queries for trending memecoin narratives (e.g. 'solana memecoin', 'new meta', 'pump fun') to see what people are talking about. 2) Call solana_scan_launches to see what categories of tokens are launching (AI, animals, political, celebrity, etc). 3) Call solana_memory_search for 'meta_rotation' to get your previous rotation observations. 4) Analyze: which narratives are heating up (increasing launches + social volume)? Which are cooling down (fewer launches, declining interest)? Are there any new narratives emerging? 5) Call solana_memory_write with category 'meta_rotation' documenting: hot narratives, cooling narratives, emerging narratives, and any rotation signals. 6) Call solana_daily_log with your rotation analysis. Do the actual research — do not just list categories.",
+      enabled: true,
+    },
+    {
+      id: "strategy-evolution",
+      schedule: "0 */4 * * *",
+      agentId,
+      message:
+        "CRON_JOB: strategy_evolution. You are running the strategy evolution cycle (SKILL.md Step 9). Do these steps: 1) Call solana_journal_summary to review recent trade performance, win rate, and patterns. 2) Call solana_strategy_state to see current feature weights and strategy version. 3) Call solana_memory_search for 'pre_trade_rationale' to review your recent decision reasoning. 4) Call solana_memory_search for patterns like 'momentum_win', 'bad_liquidity', 'late_entry' to find what features predicted wins vs losses. 5) Analyze which weights need adjustment based on evidence. 6) If you have 20+ closed trades since last evolution: call solana_strategy_update with adjusted weights (respect anti-drift guardrails: max delta ±0.10, floor 0.02, cap 0.40, sum 0.95-1.05). Increment strategy version. 7) Call solana_memory_write with category 'strategy_evolution' documenting your reasoning. 8) Call solana_daily_log with evolution results. Only update weights if evidence supports it.",
+      enabled: true,
+    },
+    {
+      id: "daily-performance-report",
+      schedule: "0 4 * * *",
+      agentId,
+      message:
+        "CRON_JOB: daily_performance_report. You are generating the daily performance report. Do these steps: 1) Call solana_state_load to get current portfolio state (positions, capital, realized PnL). 2) Call solana_journal_summary to get trade performance stats. 3) Call solana_memory_search for 'meta_rotation' to get current market narrative state. 4) Call solana_memory_search for 'source_reputation' to get alpha source performance. 5) Compile a daily summary: total PnL (realized + unrealized), number of trades, win rate, best/worst trade, current open positions, capital remaining, strategy version, market regime. 6) Post the summary to X using x_post_tweet on the solana-trader profile. Keep under 280 chars — focus on key stats (PnL, win rate, trades, regime). 7) Call solana_daily_log with the full detailed report. Make it data-driven — actual numbers, not vague descriptions.",
+      enabled: true,
+    },
+  ];
+}
+
 function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   let config = {};
   try {
@@ -525,18 +584,24 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   const isV2 = modeConfig.pluginId === "solana-trader-v2";
 
   const heartbeatPrompt =
-    "Read HEARTBEAT.md (workspace context). Follow it strictly — execute the full trading cycle and report results to the user. Do NOT reply HEARTBEAT_OK. Always produce a visible summary of what you checked and did.";
+    "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Execute a full trading cycle: Steps 0 through 10. The cycle is NOT complete until all 10 steps are done including Step 8 (memory write-back), Step 9 (X post), and Step 10 (report). Do not stop early. Do not infer or repeat old tasks from prior chats. Never reply HEARTBEAT_OK. Never end your message with a question.";
 
   /** Default periodic wake interval for TraderClaw installs (was 5m; stretched to reduce load). */
   const defaultHeartbeatEvery = "30m";
 
-  const v1Agents = [
-    { id: "main", default: true, heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } }
-  ];
+  const defaultHeartbeat = {
+    every: defaultHeartbeatEvery,
+    target: "telegram",
+    isolatedSession: true,
+    lightContext: true,
+    prompt: heartbeatPrompt,
+  };
+
+  const v1Agents = [{ id: "main", default: true, heartbeat: { ...defaultHeartbeat } }];
   const v2Agents = [
-    { id: "cto", default: true, heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } },
-    { id: "execution-specialist", heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } },
-    { id: "alpha-signal-analyst", heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } },
+    { id: "cto", default: true, heartbeat: { ...defaultHeartbeat } },
+    { id: "execution-specialist", heartbeat: { ...defaultHeartbeat } },
+    { id: "alpha-signal-analyst", heartbeat: { ...defaultHeartbeat } },
     { id: "onchain-analyst" },
     { id: "social-analyst" },
     { id: "smart-money-tracker" },
@@ -575,30 +640,8 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
 
   const mainAgent = isV2 ? "cto" : "main";
 
-  const v1Jobs = [
-    { id: "strategy-evolution", schedule: "0 */4 * * *", agentId: mainAgent, message: "CRON_JOB: strategy_evolution — Review trade journal, compute weight adjustments, update strategy. Only update if sufficient closed trades have accumulated.", enabled: true },
-    { id: "source-reputation", schedule: "0 */3 * * *", agentId: mainAgent, message: "CRON_JOB: source_reputation_recalc — Analyze which alpha signal sources led to wins vs losses. Update reputation tracking in memory.", enabled: true },
-    { id: "risk-audit", schedule: "0 */2 * * *", agentId: mainAgent, message: "CRON_JOB: portfolio_risk_audit — Portfolio stress tests, exposure checks, correlation analysis, drawdown monitoring.", enabled: true },
-    { id: "meta-rotation", schedule: "30 */3 * * *", agentId: mainAgent, message: "CRON_JOB: meta_rotation_analysis — Analyze narrative clusters across recent scans and trades. Identify hot vs cooling metas. Write observations to memory.", enabled: true },
-    { id: "dead-money-sweep", schedule: "0 */2 * * *", agentId: mainAgent, message: "CRON_JOB: dead_money_sweep — Check all open LOCAL_MANAGED positions for dead money. Exit stale positions. Tag as dead_money.", enabled: true },
-    { id: "subscription-cleanup", schedule: "0 * * * *", agentId: mainAgent, message: "CRON_JOB: subscription_cleanup — Check active Bitquery subscriptions. Unsubscribe from streams no longer needed (sold tokens, closed positions).", enabled: true },
-    { id: "daily-report", schedule: "0 4 * * *", agentId: mainAgent, message: "CRON_JOB: daily_performance_report — Calculate daily PnL, aggregate win/loss stats, source reputation summary, write comprehensive memory entry.", enabled: true },
-    { id: "whale-watch", schedule: "0 */2 * * *", agentId: mainAgent, message: "CRON_JOB: whale_activity_scan — Scan for large wallet movements, deployer activity, and accumulation patterns across watched tokens.", enabled: true }
-  ];
-
-  const v2ExtraJobs = [
-    { id: "whale-watch", schedule: "0 */2 * * *", agentId: "smart-money-tracker", message: "CRON_JOB: whale_activity_scan — Scan for large wallet movements, deployer activity, accumulation patterns. Detect smart money consensus and fresh wallet surges.", enabled: true },
-    { id: "sentiment-trend", schedule: "0 */4 * * *", agentId: "social-analyst", message: "CRON_JOB: sentiment_trend_analysis — Analyze Twitter/X trending tokens, influencer clustering, mention velocity, narrative exhaustion signals. Write to memory.", enabled: true },
-    { id: "execution-health", schedule: "0 */6 * * *", agentId: "execution-specialist", message: "CRON_JOB: execution_health_review — Review recent trade executions for slippage patterns, timing efficiency, failed transactions. Report execution quality metrics.", enabled: true },
-    { id: "source-reputation", schedule: "0 */3 * * *", agentId: "alpha-signal-analyst", message: "CRON_JOB: source_reputation_recalc — Analyze which alpha signal sources led to wins vs losses. Update reputation tracking in memory.", enabled: true },
-    { id: "risk-audit", schedule: "0 */2 * * *", agentId: "risk-officer", message: "CRON_JOB: portfolio_risk_audit — Portfolio stress tests, exposure checks, correlation analysis, drawdown monitoring. Produce risk report for CTO.", enabled: true },
-    { id: "strategy-evolution", schedule: "0 */4 * * *", agentId: "strategy-researcher", message: "CRON_JOB: strategy_evolution — Review trade journal, compute weight adjustments, update strategy. Only update if sufficient closed trades have accumulated.", enabled: true },
-    { id: "meta-rotation", schedule: "30 */3 * * *", agentId: "onchain-analyst", message: "CRON_JOB: meta_rotation_analysis — Analyze narrative clusters across recent scans and trades. Identify hot vs cooling metas. Write observations to memory.", enabled: true }
-  ];
-
-  const targetJobs = isV2
-    ? [...v1Jobs.filter(j => j.id === "dead-money-sweep" || j.id === "subscription-cleanup" || j.id === "daily-report"), ...v2ExtraJobs]
-    : v1Jobs;
+  /** Six prescriptive managed jobs (VPS report); v2 assigns the same set to the CTO agent. */
+  const targetJobs = traderCronPrescriptiveJobs(mainAgent);
 
   let removedLegacyCronJobs = false;
   if (config.cron && Object.prototype.hasOwnProperty.call(config.cron, "jobs")) {
@@ -636,6 +679,15 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     } else {
       config.hooks.mappings.push(mapping);
     }
+  }
+
+  if (!config.channels || typeof config.channels !== "object") config.channels = {};
+  if (!config.channels.defaults || typeof config.channels.defaults !== "object") config.channels.defaults = {};
+  if (!config.channels.defaults.heartbeat || typeof config.channels.defaults.heartbeat !== "object") {
+    config.channels.defaults.heartbeat = {};
+  }
+  if (config.channels.defaults.heartbeat.showOk === undefined) {
+    config.channels.defaults.heartbeat.showOk = true;
   }
 
   mkdirSync(CONFIG_DIR, { recursive: true });
