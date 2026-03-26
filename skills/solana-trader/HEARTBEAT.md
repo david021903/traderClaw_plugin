@@ -48,11 +48,7 @@ Run the skill fast loop through exit management:
 2. **Layer 2:** `solana_daily_log` with session summary (what you scanned, signals processed, trades made, positions monitored)
 3. **Layer 3:** `solana_memory_write` for any new lessons, reputation observations, pre-trade rationale, or trade reviews
 
-### Step 9 — X post (team edition / when configured) (heartbeat Step 9)
-
-If X credentials are configured and the skill calls for a periodic or milestone post, use `x_post_tweet` as required. If X is not configured, skip with a one-line note in your Step 10 report.
-
-### Step 10 — Report to user (heartbeat Step 10)
+### Step 9 — Report to user (heartbeat Step 9)
 
 After every cycle, send a brief summary to the user:
 
