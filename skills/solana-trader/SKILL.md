@@ -2066,8 +2066,10 @@ All authenticated endpoints use `Authorization: Bearer <accessToken>`.
 | `POST` | `/api/session/logout` | `refreshToken` | No auth needed. Revokes session |
 | `GET` | `/api/wallets` | — | List all wallets. Optional `?refresh=true` |
 | `POST` | `/api/wallet/create` | — | Create wallet. Optional: `label`, `publicKey`, `chain` (solana/bsc), `ownerRef`, `includePrivateKey`. Status `201` |
-| `GET` | `/api/capital/status` | `?walletId=<uuid>` | Wallet capital and daily limits |
-| `GET` | `/api/wallet/positions` | `?walletId=<uuid>` | Open positions. Optional `?status=` |
+| `GET` | `/api/capital/status` | `?walletId=<uuid>` | Wallet capital and daily limits. **PnL:** `totalUnrealizedPnl` / `totalRealizedPnl` are **USD** (stored); `totalUnrealizedPnlSol` / `totalRealizedPnlSol` / `totalPnlSol` are **SOL** derived with `solPriceUsd` (agent-safe). |
+| `GET` | `/api/wallet/positions` | `?walletId=<uuid>` | Positions. **`realizedPnl` / `unrealizedPnl` = USD** in DB; use **`realizedPnlSol` / `unrealizedPnlSol`** for SOL. `unrealizedReturnPct` = ROI vs cost (for sweep). |
+| `POST` | `/api/wallet/token-balance` | `walletId`, `tokenAddress` | On-chain SPL **uiAmount** for the wallet (same as server `balanceOf`) |
+| `POST` | `/api/wallet/sweep-dead-tokens` | `walletId` | Optional: `maxLossPct` (default **80**), `slippageBps`, `dryRun`. Sells **100%** of each **open** position with `unrealizedReturnPct` ≤ **-maxLossPct**. **trade:execute** scope. |
 | `GET` | `/api/funding/instructions` | `?walletId=<uuid>` | Deposit instructions |
 | `GET` | `/api/killswitch/status` | `?walletId=<uuid>` | Kill switch state |
 | `POST` | `/api/killswitch` | `walletId`, `enabled` | Toggle kill switch. Optional: `mode` (TRADES_ONLY / TRADES_AND_STREAMS). **Pro tier required** |
@@ -2703,8 +2705,10 @@ Each user configures their own X/Twitter API developer account tokens in the plu
 | Thesis | `solana_build_thesis` | Full context package |
 | Trade | `solana_trade_precheck` | Pre-trade risk validation |
 | Trade | `solana_trade_execute` | Execute trade |
-| Monitor | `solana_positions` | Position tracking |
-| Monitor | `solana_capital_status` | Portfolio status |
+| Monitor | `solana_positions` | Position tracking (USD PnL in DB; use `*PnlSol` fields for SOL) |
+| Monitor | `solana_capital_status` | Portfolio status (same USD vs SOL split as API) |
+| Risk | `solana_sweep_dead_tokens` | Full-exit open positions below **-maxLossPct** ROI (default 80%); use `dryRun` first |
+| Wallet | `solana_wallet_token_balance` | On-chain SPL balance for a mint |
 | Review | `solana_trade_review` | Post-trade review |
 | Memory | `solana_memory_write` | Write journal entry (deployer profiles, filter evolution, convergence) |
 | Memory | `solana_memory_search` | Search memories (check deployer history before profiling) |
