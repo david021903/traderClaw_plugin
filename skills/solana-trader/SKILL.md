@@ -14,7 +14,7 @@ The orchestrator gathers data, enforces execution policy, applies entitlement li
 
 ## How You Access the Orchestrator
 
-You interact with the orchestrator **exclusively through plugin tools** (e.g. `solana_system_status`, `solana_scan`, `solana_alpha_signals`, `solana_trade`, etc.). You have no other access method.
+You interact with the orchestrator **exclusively through plugin tools** (e.g. `solana_system_status`, `solana_scan_hot_pairs`,`solana_scan_launches` , `solana_alpha_signals`, `solana_trade_precheck`, `solana_trade_execute`, etc.). You have no other access method.
 
 **Critical rules:**
 - **You do NOT have direct HTTP/API access.** Never attempt to call REST endpoints, use curl/fetch, or construct API URLs. You cannot reach the orchestrator that way.
@@ -234,8 +234,14 @@ All values are internal targets that must still comply with server policy caps.
 | Position size (exploratory) | 3–8% of capital | 5–10% of capital |
 | Max correlated cluster exposure | 40% of capital | 40% of capital |
 | Consecutive losses → kill switch | 5 | 7 |
-| Rapid drawdown defense trigger | -20% on any position | -15% on any position |
-| Partial profit trigger | +40–60% (optional) | +25–50% (take partial quickly) |
+| Stop loss (slExits) | -20% on every position | -40% on every position |
+| Trailing Stop loss ("trailingStop": {
+      "levels": [
+        { "percentage": 25, "amount": 50 },
+        { "percentage": 35, "amount": 100, "triggerAboveATH": 100 }
+      ]
+    }) where percent is the price decrease from entry price and amount is the size of position in percentage and in token holding  | -20% on every position and optional triggerAboveATH | -40% on every position |
+| Multiple Take Profit exits (tpExits) (e.g [{"percent": 100, "amountPct": 30},{ "percent": 200, "amountPct": 100" }], where percent is the price increase from entry price and amountPct is the size of position in percentage and in token holding) | +100–300% (multiple) | +200–500% (multiple) |
 | Exploration ratio | 20% experimental / 80% proven | 50% experimental / 50% proven |
 | Weight evolution (minimum trades) | ≥20 closed trades | ≥20 closed trades |
 | Max weight delta per update | ±0.10 | ±0.15 |
@@ -330,7 +336,7 @@ There is no context loss from this separation. Cron outputs flow into the persis
        ↓
 2. Step 0: INTERRUPT CHECK — identify wake-up trigger, check kill switch, check dead money, STRATEGY INTEGRITY CHECK
        ↓
-3. Step 1: SCAN — call solana_scan for broad discovery, process Bitquery subscriptions
+3. Step 1: SCAN — call solana_scan_launches and solana_scan_hot_pairs for broad discovery, process Bitquery subscriptions
        ↓
 4. Step 1.5b: ALPHA SIGNALS — poll solana_alpha_signals, score, classify priority
        ↓
@@ -901,10 +907,6 @@ Discovery subscriptions complement — not replace — scan endpoints and alpha 
 | Alpha signals (external) | Real-time push from aggregator | Limited to what monitored channels catch | Pre-filtered by human/bot curators |
 
 When multiple paths independently surface the same token = convergence = highest conviction. Log convergence events via `solana_memory_write` with tag `signal_convergence`.
-
-**Future enhancement (not yet available):**
-
-When `solana_firehose_config` and `solana_firehose_status` tools become available, you will be able to configure advanced filter parameters (volume thresholds, buyer counts, whale detection) directly on the orchestrator or local worker, and check health/stats. For now, use the existing `solana_bitquery_subscribe` with the available template keys and evolve your subscription strategy based on outcomes.
 
 ---
 
@@ -1671,7 +1673,6 @@ Your discovery subscriptions (Step 1.75) should evolve alongside your strategy w
    - **Adjusting discovery subscriptions** (broad, for token detection):
      Discovery subscriptions like `pumpFunTokenCreation` and `raydiumNewPools` are fire-and-forget — you set them up once and they run until you unsubscribe. Evolution here means deciding which broad subscriptions to keep vs remove, not changing their parameters.
    
-   When `solana_firehose_config` becomes available, you will be able to configure advanced filter parameters (volume thresholds, buyer counts, whale detection) on the orchestrator or local worker side without the unsub/resub cycle.
 
 5. Mode switches should trigger subscription review:
    - Switching to DEGEN → add more discovery subscriptions, broaden parameters
