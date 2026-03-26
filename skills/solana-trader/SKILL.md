@@ -1128,9 +1128,11 @@ If BUY, you must define before executing:
 - `tpLevels` — staged take-profit levels as percentages
   - HARDENED: `[50, 100, 200]` (patient, ride trends)
   - DEGEN: `[25, 50, 100]` (lock gains faster)
-- `trailingStopPct` — trailing stop activation
-  - HARDENED: 12–18%
-  - DEGEN: 8–15%
+- `trailingStopPct` — single trailing stop (% drawdown from session high once active). Legacy/simple path on the server.
+- **`trailingStop`** (preferred for staging) — `{ levels: [ ... ] }` with **1–5** levels. Each level:
+  - `percentage` — trailing drawdown % from the armed high once that level is active (required).
+  - `amount` — % of position to sell at this level (1–100; server default **100**).
+  - `triggerAboveATH` — **optional.** Price must reach this **% above the session ATH** before this level arms (e.g. `50` → 1.5× ATH). **If omitted, the API defaults to `100` (2× ATH).** Use a smaller value (e.g. `25`) to arm earlier; use `trailingStopPct` instead if you want the simpler single-level trailing that keys off ATH without this gate.
 - `managementMode` — LOCAL_MANAGED or SERVER_MANAGED
 - `slippageBps` — must scale with liquidity:
   - Pool depth > $500K: 100–200 bps
@@ -1227,7 +1229,7 @@ Call `solana_trade_execute` with:
 - **For buy:** `sizeSol` (amount in SOL to spend) — required
 - **For sell:** `sellPct` (percentage of position to sell, 1–100 where 100 = full exit) **or** `sizeTokens` (exact token count) — one is required. If both sent, `sellPct` wins. Do NOT send `sizeSol` for sells.
 - `slippageBps` (scaled to liquidity as defined in your exit plan — hard cap 800bps)
-- `slPct`, `tpLevels`, `trailingStopPct`
+- `slPct`, `tpLevels`, **`trailingStopPct` and/or `trailingStop`** (see **Define Exit Plan** above — if both are sent, `trailingStop` wins)
 - `managementMode`
 
 Record the returned `tradeId` and `positionId`. You will need these for monitoring and review.
@@ -2073,7 +2075,7 @@ All authenticated endpoints use `Authorization: Bearer <accessToken>`.
 | `POST` | `/api/strategy/update` | `walletId`, `featureWeights` | Update weights. Optional: `strategyVersion`, `mode` (HARDENED/DEGEN) |
 | `POST` | `/api/thesis/build` | `walletId`, `tokenAddress` | Build full thesis package |
 | `POST` | `/api/trade/precheck` | `walletId`, `tokenAddress`, `side` (buy/sell), `slippageBps`. Buy: `sizeSol`. Sell: `sellPct` or `sizeTokens` | Risk/policy check, no execution |
-| `POST` | `/api/trade/execute` | `walletId`, `tokenAddress`, `side`, `slippageBps`. Buy: `sizeSol`. Sell: `sellPct` or `sizeTokens` | Execute trade. Optional: `symbol`, `tpLevels[]`, `slPct`, `trailingStopPct`. Header: `x-idempotency-key` |
+| `POST` | `/api/trade/execute` | `walletId`, `tokenAddress`, `side`, `slippageBps`. Buy: `sizeSol`. Sell: `sellPct` or `sizeTokens` | Execute trade. Optional: `symbol`, `tpLevels[]`, `slPct`, `trailingStopPct`, `trailingStop: { levels: [{ percentage, amount?, triggerAboveATH? }] }` (1–5 levels; **omitted `triggerAboveATH` defaults to 100** = 2× ATH). Header: `x-idempotency-key` |
 | `POST` | `/api/trade/review` | `walletId`, `outcome` (win/loss/neutral), `notes` | Post-trade review. Optional: `tradeId`, `tokenAddress`, `pnlSol`, `tags[]`, `strategyVersion` (strict semver). Status `201` |
 | `POST` | `/api/memory/write` | `walletId`, `notes` | Journal entry. Optional: `tokenAddress`, `outcome` (win/loss/neutral), `tags[]`, `strategyVersion` (strict semver). Status `201` |
 | `POST` | `/api/memory/search` | `walletId`, `query` | Search memory entries |
