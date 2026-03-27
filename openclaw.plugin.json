@@ -1,7 +1,7 @@
 {
   "id": "solana-trader",
   "name": "Solana Trader",
-  "description": "Team edition — Solana trading agent with X/Twitter journal & engagement. Full V1 trading capabilities plus 5 X tools.",
+  "description": "Public edition V1-Upgraded — Solana trading agent with X/Twitter social intel (read-only, no posting), standardized tool envelopes, intelligence lab, prompt injection scrubbing, and split skill architecture. Full V1 trading capabilities plus 17 new intelligence tools.",
   "skills": ["skills/solana-trader"],
   "configSchema": {
     "type": "object",
@@ -55,9 +55,34 @@
         "type": "string",
         "description": "Bearer token used by orchestrator when calling your Gateway /v1/responses."
       },
+      "workspaceDir": {
+        "type": "string",
+        "description": "Override workspace directory path. Defaults to ~/.openclaw/workspace/ or OPENCLAW_WORKSPACE_DIR env var."
+      },
+      "bootstrapDecisionCount": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 10,
+        "description": "Number of recent decisions to include in bootstrap digest"
+      },
+      "bootstrapBulletinWindowHours": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 168,
+        "default": 24,
+        "description": "Hours of bulletin entries to include in bootstrap digest"
+      },
+      "dailyLogRetentionDays": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 365,
+        "default": 30,
+        "description": "Number of days to retain daily log files before pruning"
+      },
       "x": {
         "type": "object",
-        "description": "X/Twitter configuration for journal & engagement tools",
+        "description": "X/Twitter configuration for read-only social intel tools",
         "properties": {
           "consumerKey": { "type": "string", "description": "X App consumer key (shared across all agents)" },
           "consumerSecret": { "type": "string", "description": "X App consumer secret" },
@@ -130,6 +155,23 @@
     "gatewayToken": {
       "label": "Gateway Token",
       "sensitive": true,
+      "advanced": true
+    },
+    "workspaceDir": {
+      "label": "Workspace Directory",
+      "placeholder": "~/.openclaw/workspace",
+      "advanced": true
+    },
+    "bootstrapDecisionCount": {
+      "label": "Bootstrap Decision Count",
+      "advanced": true
+    },
+    "bootstrapBulletinWindowHours": {
+      "label": "Bulletin Window (hours)",
+      "advanced": true
+    },
+    "dailyLogRetentionDays": {
+      "label": "Daily Log Retention (days)",
       "advanced": true
     }
   }
