@@ -1,19 +1,18 @@
 {
-  "name": "solana-traderclaw",
-  "version": "1.0.30",
-  "description": "TraderClaw V1 — autonomous Solana memecoin trading for OpenClaw (team edition: X/Twitter journal and engagement tools)",
+  "name": "traderclaw-team-v1-upgraded-public",
+  "version": "1.1.0",
+  "description": "TraderClaw V1-Upgraded Public Edition — Solana trading agent with X/Twitter social intel (read-only), standardized tool envelopes, intelligence lab, prompt scrubbing, and split skill architecture",
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
     ".": "./dist/index.js"
   },
   "bin": {
-    "traderclaw": "bin/traderclaw.cjs"
+    "traderclaw": "./bin/openclaw-trader.mjs"
   },
   "files": [
     "dist/",
     "bin/*.mjs",
-    "bin/*.cjs",
     "skills/",
     "config/",
     "lib/",
@@ -35,7 +34,9 @@
     "x",
     "twitter",
     "journal",
-    "team"
+    "team",
+    "intelligence",
+    "upgraded"
   ],
   "license": "MIT",
   "engines": {
