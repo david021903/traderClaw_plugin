@@ -6,6 +6,7 @@ import { AlphaBuffer } from "./src/alpha-buffer.js";
 import { AlphaStreamManager } from "./src/alpha-ws.js";
 import { parseXConfig, registerXTools } from "./lib/x-tools.mjs";
 import { registerWebFetchTool } from "./lib/web-fetch.mjs";
+import { readRecoverySecretFromDisk, writeRecoverySecretToOpenclawAtomic } from "./src/recovery-secret-config.js";
 import * as fs from "fs";
 import { homedir } from "os";
 import * as path from "path";
@@ -24,6 +25,8 @@ interface PluginConfig {
   externalUserId?: string;
   refreshToken?: string;
   walletPublicKey?: string;
+  /** Consumable one-time recovery secret (rotated server-side on each use). */
+  recoverySecret?: string;
   apiTimeout?: number;
   agentId?: string;
   gatewayBaseUrl?: string;
@@ -48,6 +51,7 @@ function parseConfig(raw: unknown): PluginConfig {
   const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : undefined;
   const gatewayToken = typeof obj.gatewayToken === "string" ? obj.gatewayToken : undefined;
   const dataDir = typeof obj.dataDir === "string" ? obj.dataDir : undefined;
+  const recoverySecret = typeof obj.recoverySecret === "string" ? obj.recoverySecret : undefined;
   const xConfig = parseXConfig(obj) as XConfig;
   return {
     orchestratorUrl,
@@ -56,6 +60,7 @@ function parseConfig(raw: unknown): PluginConfig {
     externalUserId,
     refreshToken,
     walletPublicKey,
+    recoverySecret,
     apiTimeout,
     agentId,
     gatewayBaseUrl,
@@ -219,6 +224,22 @@ const solanaTraderPlugin = {
       walletPrivateKeyProvider: () => {
         const runtimeKey = process.env.TRADERCLAW_WALLET_PRIVATE_KEY || "";
         return runtimeKey.trim() || undefined;
+      },
+      recoverySecretProvider: async () => {
+        const fromDisk = readRecoverySecretFromDisk();
+        if (fromDisk) return fromDisk;
+        const s = config.recoverySecret;
+        return typeof s === "string" && s.trim().length > 0 ? s.trim() : undefined;
+      },
+      onRecoverySecretRotated: (newSecret) => {
+        try {
+          writeRecoverySecretToOpenclawAtomic(newSecret);
+          api.logger.info("[solana-trader] Persisted rotated recovery secret to openclaw.json");
+        } catch (err: unknown) {
+          api.logger.warn(
+            `[solana-trader] Failed to write rotated recovery secret: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       },
       clientLabel: "openclaw-plugin-runtime",
       timeout: apiTimeout,
