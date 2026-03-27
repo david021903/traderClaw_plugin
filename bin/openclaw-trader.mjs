@@ -413,6 +413,17 @@ async function doRefresh(orchestratorUrl, refreshToken) {
   return res.data;
 }
 
+async function doRecoverSecret(orchestratorUrl, apiKey, recoverySecret) {
+  const res = await httpRequest(`${orchestratorUrl}/api/session/recover-secret`, {
+    method: "POST",
+    body: { apiKey, recoverySecret, clientLabel: "openclaw-trader-cli" },
+  });
+  if (!res.ok) {
+    throw new Error(`recover-secret failed (HTTP ${res.status}): ${JSON.stringify(res.data)}`);
+  }
+  return res.data;
+}
+
 async function doLogout(orchestratorUrl, refreshToken) {
   const res = await httpRequest(`${orchestratorUrl}/api/session/logout`, {
     method: "POST",
@@ -435,6 +446,23 @@ async function establishSession(orchestratorUrl, pluginConfig, walletPrivateKeyI
 
   if (!pluginConfig.apiKey) {
     throw new Error("No apiKey configured. Run 'traderclaw setup' first.");
+  }
+
+  if (pluginConfig.recoverySecret) {
+    printInfo("  Attempting session recovery via consumable secret...");
+    try {
+      const tokens = await doRecoverSecret(orchestratorUrl, pluginConfig.apiKey, pluginConfig.recoverySecret);
+      pluginConfig.refreshToken = tokens.refreshToken;
+      if (tokens.recoverySecret) {
+        pluginConfig.recoverySecret = tokens.recoverySecret;
+      }
+      printSuccess("  Session recovered via consumable secret");
+      printInfo(`  Tier: ${tokens.session?.tier || "unknown"}`);
+      return tokens;
+    } catch (err) {
+      printWarn(`  Consumable recovery failed: ${err.message || err}`);
+      printWarn("  Falling back to wallet challenge...");
+    }
   }
 
   printInfo("  Starting challenge flow...");
@@ -500,6 +528,7 @@ async function cmdSetup(args) {
   let signedUpThisSession = false;
   let writeGatewayEnvFlag = false;
   let noEnsureGatewayPersistent = false;
+  let signupRecoverySecret = undefined;
 
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === "--api-key" || args[i] === "-k") && args[i + 1]) {
@@ -565,6 +594,9 @@ async function cmdSetup(args) {
       try {
         const signupResult = await doSignup(orchestratorUrl, externalUserId);
         apiKey = signupResult.apiKey;
+        if (signupResult.recoverySecret) {
+          signupRecoverySecret = signupResult.recoverySecret;
+        }
         signedUpThisSession = true;
         printSuccess(`  Signup successful!`);
         printInfo(`  Tier: ${signupResult.tier}`);
@@ -618,6 +650,8 @@ async function cmdSetup(args) {
 
   print("\nEstablishing session...\n");
 
+  const existingForRecovery = readConfig();
+  const prevPlugin = getPluginConfig(existingForRecovery);
   const pluginConfig = {
     orchestratorUrl,
     walletId: null,
@@ -626,6 +660,7 @@ async function cmdSetup(args) {
     refreshToken: undefined,
     walletPublicKey: undefined,
     agentId: "main",
+    recoverySecret: signupRecoverySecret ?? prevPlugin?.recoverySecret,
   };
 
   let lastSeenWalletPrivateKey = runtimeWalletPrivateKey || "";
