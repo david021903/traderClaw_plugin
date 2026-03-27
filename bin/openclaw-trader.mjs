@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createInterface } from "readline";
-import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, appendFileSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
@@ -2596,6 +2596,242 @@ async function cmdInstall(args) {
   printInfo("Press Ctrl+C to stop the wizard server.");
 }
 
+async function cmdTestSession(args) {
+  const config = readConfig();
+  const pluginConfig = getPluginConfig(config);
+
+  if (!pluginConfig) {
+    printError("No plugin configuration found. Run 'traderclaw setup' first.");
+    process.exit(1);
+  }
+
+  const orchestratorUrl = pluginConfig.orchestratorUrl;
+  if (!orchestratorUrl) {
+    printError("orchestratorUrl not set in config. Run 'traderclaw setup' to fix.");
+    process.exit(1);
+  }
+
+  const dataDir = pluginConfig.dataDir || join(process.cwd(), ".traderclaw-v1-data");
+  const sessionTokensPath = join(dataDir, "session-tokens.json");
+
+  let sidecar = null;
+  try {
+    if (existsSync(sessionTokensPath)) {
+      sidecar = JSON.parse(readFileSync(sessionTokensPath, "utf-8"));
+    }
+  } catch { /* ignore */ }
+
+  const effectiveRefreshToken =
+    (sidecar?.refreshToken && sidecar.refreshToken.length > 0)
+      ? sidecar.refreshToken
+      : pluginConfig.refreshToken;
+
+  const walletPrivateKeyInput = args.includes("--wallet-private-key")
+    ? args[args.indexOf("--wallet-private-key") + 1] || ""
+    : "";
+
+  print("\nTraderClaw V1 — Session Auth Test\n");
+  print("=".repeat(50));
+  printInfo(`  Orchestrator:     ${orchestratorUrl}`);
+  printInfo(`  API key:          ${pluginConfig.apiKey ? maskKey(pluginConfig.apiKey) : "MISSING"}`);
+  printInfo(`  Refresh token:    ${effectiveRefreshToken ? maskKey(effectiveRefreshToken) : "MISSING"}`);
+  printInfo(`  Sidecar file:     ${sidecar ? sessionTokensPath : "not found"}`);
+  printInfo(`  Wallet pub key:   ${pluginConfig.walletPublicKey || "not set"}`);
+  printInfo(`  Wallet priv key:  ${getRuntimeWalletPrivateKey(walletPrivateKeyInput) ? "available" : "NOT AVAILABLE"}`);
+  print("");
+
+  const results = [];
+  let currentAccessToken = null;
+  let currentRefreshToken = effectiveRefreshToken;
+
+  // --- Test 1: Initial refresh ---
+  print("  [1/5] Token refresh...");
+  const t1Start = Date.now();
+  try {
+    if (!currentRefreshToken) {
+      throw new Error("No refresh token available — skip to challenge flow test");
+    }
+    const tokens = await doRefresh(orchestratorUrl, currentRefreshToken);
+    if (!tokens) {
+      printWarn("        Refresh returned null (token revoked/expired) — will test challenge flow");
+      results.push({ test: "initial_refresh", status: "expired", ms: Date.now() - t1Start });
+      currentRefreshToken = null;
+    } else {
+      const ms = Date.now() - t1Start;
+      currentAccessToken = tokens.accessToken;
+      currentRefreshToken = tokens.refreshToken;
+      printSuccess(`        OK (${ms}ms) — accessTokenTtl: ${tokens.accessTokenTtlSeconds}s, refreshTokenTtl: ${tokens.refreshTokenTtlSeconds}s`);
+      results.push({
+        test: "initial_refresh",
+        status: "ok",
+        ms,
+        accessTokenTtl: tokens.accessTokenTtlSeconds,
+        refreshTokenTtl: tokens.refreshTokenTtlSeconds,
+        tier: tokens.session?.tier,
+      });
+    }
+  } catch (err) {
+    printError(`        FAIL: ${err.message}`);
+    results.push({ test: "initial_refresh", status: "fail", ms: Date.now() - t1Start, error: err.message });
+    currentRefreshToken = null;
+  }
+
+  // --- Test 2: Second refresh (verifies rotation worked) ---
+  print("  [2/5] Second refresh (token rotation check)...");
+  const t2Start = Date.now();
+  try {
+    if (!currentRefreshToken) {
+      throw new Error("No refresh token — skipped (previous test failed)");
+    }
+    const tokens2 = await doRefresh(orchestratorUrl, currentRefreshToken);
+    if (!tokens2) {
+      printError("        FAIL: second refresh returned null — rotation may be broken");
+      results.push({ test: "rotation_check", status: "fail", ms: Date.now() - t2Start, error: "null response" });
+    } else {
+      const ms = Date.now() - t2Start;
+      const rotated = tokens2.refreshToken !== currentRefreshToken;
+      currentAccessToken = tokens2.accessToken;
+      currentRefreshToken = tokens2.refreshToken;
+      if (rotated) {
+        printSuccess(`        OK (${ms}ms) — refresh token rotated correctly`);
+      } else {
+        printWarn(`        OK (${ms}ms) — refresh token NOT rotated (server may use static tokens)`);
+      }
+      results.push({ test: "rotation_check", status: "ok", ms, rotated });
+    }
+  } catch (err) {
+    printError(`        FAIL: ${err.message}`);
+    results.push({ test: "rotation_check", status: "fail", ms: Date.now() - t2Start, error: err.message });
+  }
+
+  // --- Test 3: API call with access token ---
+  print("  [3/5] Authenticated API call (/healthz)...");
+  const t3Start = Date.now();
+  try {
+    if (!currentAccessToken) {
+      throw new Error("No access token — skipped");
+    }
+    const health = await httpRequest(`${orchestratorUrl}/healthz`, {
+      accessToken: currentAccessToken,
+      timeout: 8000,
+    });
+    const ms = Date.now() - t3Start;
+    if (health.ok) {
+      printSuccess(`        OK (${ms}ms) — orchestrator healthy`);
+      results.push({ test: "api_call", status: "ok", ms });
+    } else {
+      printError(`        FAIL: HTTP ${health.status}`);
+      results.push({ test: "api_call", status: "fail", ms, error: `HTTP ${health.status}` });
+    }
+  } catch (err) {
+    printError(`        FAIL: ${err.message}`);
+    results.push({ test: "api_call", status: "fail", ms: Date.now() - t3Start, error: err.message });
+  }
+
+  // --- Test 4: Challenge flow (re-auth from scratch) ---
+  print("  [4/5] Challenge flow (full re-authentication)...");
+  const t4Start = Date.now();
+  try {
+    if (!pluginConfig.apiKey) {
+      throw new Error("No API key — cannot test challenge flow");
+    }
+    const challenge = await doChallenge(orchestratorUrl, pluginConfig.apiKey, pluginConfig.walletPublicKey);
+    const ms = Date.now() - t4Start;
+    if (challenge.walletProofRequired) {
+      const wpk = getRuntimeWalletPrivateKey(walletPrivateKeyInput);
+      if (wpk) {
+        try {
+          const walletSig = signChallengeLocally(challenge.challenge, wpk);
+          const tokens = await doSessionStart(
+            orchestratorUrl,
+            pluginConfig.apiKey,
+            challenge.challengeId,
+            challenge.walletPublicKey || pluginConfig.walletPublicKey,
+            walletSig,
+          );
+          const totalMs = Date.now() - t4Start;
+          currentAccessToken = tokens.accessToken;
+          currentRefreshToken = tokens.refreshToken;
+          printSuccess(`        OK (${totalMs}ms) — challenge + wallet proof succeeded`);
+          results.push({ test: "challenge_flow", status: "ok", ms: totalMs, walletProof: true });
+        } catch (sigErr) {
+          printError(`        FAIL (wallet signing): ${sigErr.message}`);
+          results.push({ test: "challenge_flow", status: "fail", ms: Date.now() - t4Start, error: sigErr.message });
+        }
+      } else {
+        printWarn(`        PARTIAL (${ms}ms) — challenge OK but wallet proof needed and TRADERCLAW_WALLET_PRIVATE_KEY not available`);
+        printWarn("        Set TRADERCLAW_WALLET_PRIVATE_KEY env var or pass --wallet-private-key to test fully");
+        results.push({ test: "challenge_flow", status: "partial", ms, walletProofRequired: true, keyAvailable: false });
+      }
+    } else {
+      const tokens = await doSessionStart(orchestratorUrl, pluginConfig.apiKey, challenge.challengeId);
+      const totalMs = Date.now() - t4Start;
+      currentAccessToken = tokens.accessToken;
+      currentRefreshToken = tokens.refreshToken;
+      printSuccess(`        OK (${totalMs}ms) — challenge flow succeeded (no wallet proof needed)`);
+      results.push({ test: "challenge_flow", status: "ok", ms: totalMs, walletProof: false });
+    }
+  } catch (err) {
+    printError(`        FAIL: ${err.message}`);
+    results.push({ test: "challenge_flow", status: "fail", ms: Date.now() - t4Start, error: err.message });
+  }
+
+  // --- Test 5: Persist rotated tokens back to sidecar ---
+  print("  [5/5] Persist tokens to sidecar...");
+  try {
+    if (currentRefreshToken && currentAccessToken) {
+      mkdirSync(dataDir, { recursive: true });
+      const payload = {
+        refreshToken: currentRefreshToken,
+        accessToken: currentAccessToken,
+        accessTokenExpiresAt: Date.now() + 900_000,
+        walletPublicKey: pluginConfig.walletPublicKey || undefined,
+      };
+      const tmp = `${sessionTokensPath}.${process.pid}.${Date.now()}.tmp`;
+      writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\n", "utf-8");
+      const { renameSync } = await import("fs");
+      renameSync(tmp, sessionTokensPath);
+      printSuccess(`        OK — written to ${sessionTokensPath}`);
+      results.push({ test: "persist_sidecar", status: "ok" });
+
+      pluginConfig.refreshToken = currentRefreshToken;
+      removeLegacyWalletPrivateKey(pluginConfig);
+      setPluginConfig(config, pluginConfig);
+      writeConfig(config);
+      printSuccess("        Config updated with latest refresh token");
+    } else {
+      printWarn("        SKIP — no valid tokens to persist");
+      results.push({ test: "persist_sidecar", status: "skip" });
+    }
+  } catch (err) {
+    printError(`        FAIL: ${err.message}`);
+    results.push({ test: "persist_sidecar", status: "fail", error: err.message });
+  }
+
+  // --- Summary ---
+  print("\n" + "=".repeat(50));
+  const passed = results.filter((r) => r.status === "ok").length;
+  const failed = results.filter((r) => r.status === "fail").length;
+  const partial = results.filter((r) => r.status === "partial" || r.status === "expired" || r.status === "skip").length;
+
+  if (failed === 0 && passed > 0) {
+    printSuccess(`\n  ALL TESTS PASSED (${passed}/${results.length})`);
+  } else if (failed > 0) {
+    printError(`\n  ${failed} FAILED, ${passed} passed, ${partial} skipped/partial`);
+  } else {
+    printWarn(`\n  ${passed} passed, ${partial} skipped/partial`);
+  }
+
+  print("\n  Build-and-test workflow (no reinstall):");
+  printInfo("    cd /path/to/plugin && npm run build");
+  printInfo("    npm link");
+  printInfo("    sudo systemctl restart openclaw");
+  printInfo("    traderclaw test-session");
+  print("");
+
+  if (failed > 0) process.exit(1);
+}
+
 function printHelp() {
   print(`
 TraderClaw V1 CLI v${VERSION}
@@ -2612,6 +2848,7 @@ Commands:
   logout             Revoke current session and clear tokens
   status             Check connection health and wallet status
   config             View and manage configuration
+  test-session       Test session auth flow (refresh, rotation, challenge) without reinstalling
 
 Setup options:
   --api-key, -k      API key (skip interactive prompt)
@@ -2658,6 +2895,8 @@ Examples:
   traderclaw status
   traderclaw config show
   traderclaw config set apiTimeout 60000
+  traderclaw test-session
+  traderclaw test-session --wallet-private-key <base58_key>
 `);
 }
 
@@ -2702,6 +2941,9 @@ async function main() {
       break;
     case "config":
       await cmdConfig(args.slice(1));
+      break;
+    case "test-session":
+      await cmdTestSession(args.slice(1));
       break;
     default:
       printError(`Unknown command: ${command}`);
