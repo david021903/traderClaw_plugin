@@ -9,9 +9,7 @@ import { execSync } from "child_process";
 import { createServer } from "http";
 import { sortModelsByPreference } from "./llm-model-preference.mjs";
 
-const PACKAGE_JSON = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
-const VERSION = PACKAGE_JSON.version;
-const NPM_PACKAGE_NAME = typeof PACKAGE_JSON.name === "string" ? PACKAGE_JSON.name : "solana-traderclaw";
+const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')).version;
 const PLUGIN_ID = "solana-trader";
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
@@ -498,8 +496,6 @@ async function cmdSetup(args) {
   let showWalletPrivateKey = false;
   let doSignupFlow = false;
   let signedUpThisSession = false;
-  let writeGatewayEnvFlag = false;
-  let noEnsureGatewayPersistent = false;
 
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === "--api-key" || args[i] === "-k") && args[i + 1]) {
@@ -532,12 +528,6 @@ async function cmdSetup(args) {
     if (args[i] === "--signup") {
       doSignupFlow = true;
     }
-    if (args[i] === "--write-gateway-env") {
-      writeGatewayEnvFlag = true;
-    }
-    if (args[i] === "--no-ensure-gateway-persistent") {
-      noEnsureGatewayPersistent = true;
-    }
   }
   const runtimeWalletPrivateKey = getRuntimeWalletPrivateKey(walletPrivateKey);
 
@@ -561,29 +551,16 @@ async function cmdSetup(args) {
       externalUserId = await prompt("External User ID (or press enter for auto-generated)", `agent_${randomUUID().slice(0, 8)}`);
     }
 
-    for (let signupAttempt = 0; ; signupAttempt++) {
-      try {
-        const signupResult = await doSignup(orchestratorUrl, externalUserId);
-        apiKey = signupResult.apiKey;
-        signedUpThisSession = true;
-        printSuccess(`  Signup successful!`);
-        printInfo(`  Tier: ${signupResult.tier}`);
-        printInfo(`  Scopes: ${signupResult.scopes.join(", ")}`);
-        break;
-      } catch (err) {
-        const msg = err.message || String(err);
-        if (msg.includes("SIGNUP_ALREADY_COMPLETED") || msg.includes("409")) {
-          printWarn(`  User "${externalUserId}" is already registered.`);
-          if (signupAttempt >= 2) {
-            printError("  Too many attempts. If you already have an account, re-run setup and choose 'y' when asked for an API key.");
-            process.exit(1);
-          }
-          externalUserId = await prompt("Try a different User ID", `agent_${randomUUID().slice(0, 8)}`);
-        } else {
-          printError(`Signup failed: ${msg}`);
-          process.exit(1);
-        }
-      }
+    try {
+      const signupResult = await doSignup(orchestratorUrl, externalUserId);
+      apiKey = signupResult.apiKey;
+      signedUpThisSession = true;
+      printSuccess(`  Signup successful!`);
+      printInfo(`  Tier: ${signupResult.tier}`);
+      printInfo(`  Scopes: ${signupResult.scopes.join(", ")}`);
+    } catch (err) {
+      printError(`Signup failed: ${err.message}`);
+      process.exit(1);
     }
   }
 
@@ -599,14 +576,10 @@ async function cmdSetup(args) {
     if (showApiKey) {
       printInfo("  (--show-api-key: full key is already shown above.)");
     }
-    for (let attempt = 0; ; attempt++) {
-      const ack = await prompt("Type API_KEY_STORED to confirm you saved this key", "");
-      if (ack === "API_KEY_STORED") break;
-      if (attempt >= 2) {
-        printError("Confirmation not provided after 3 attempts. Aborting setup so you do not lose access to your API key.");
-        process.exit(1);
-      }
-      printWarn("  Please type exactly: API_KEY_STORED");
+    const ack = await prompt("Type API_KEY_STORED to confirm you saved this key", "");
+    if (ack !== "API_KEY_STORED") {
+      printError("Confirmation not provided. Aborting setup so you do not lose access to your API key.");
+      process.exit(1);
     }
     printSuccess("  API key backup confirmation received.");
   }
@@ -771,31 +744,12 @@ async function cmdSetup(args) {
     }
 
     if (lastSeenWalletPrivateKey) {
-      for (let attempt = 0; ; attempt++) {
-        const ack = await prompt("Type BACKED_UP to continue", "");
-        if (ack === "BACKED_UP") break;
-        if (attempt >= 2) {
-          printError("Backup confirmation not provided after 3 attempts. Aborting setup to prevent key loss.");
-          process.exit(1);
-        }
-        printWarn("  Please type exactly: BACKED_UP");
+      const ack = await prompt("Type BACKED_UP to continue", "");
+      if (ack !== "BACKED_UP") {
+        printError("Backup confirmation not provided. Aborting setup to prevent key loss.");
+        process.exit(1);
       }
       printSuccess("  Backup confirmation received.");
-    }
-  }
-
-  // Re-authenticate WITH wallet proof so the saved refreshToken is accepted by
-  // the server after the account has a wallet.  Without this, the gateway gets a
-  // token issued pre-wallet that the server may reject on refresh.
-  if (lastSeenWalletPrivateKey && pluginConfig.walletPublicKey) {
-    print("\nStrengthening session with wallet proof...\n");
-    try {
-      pluginConfig.refreshToken = undefined;
-      sessionTokens = await establishSession(orchestratorUrl, pluginConfig, lastSeenWalletPrivateKey);
-      printSuccess("  Session re-established with wallet proof.");
-    } catch (err) {
-      printWarn(`  Wallet-proof re-auth skipped: ${err.message}`);
-      printWarn(`  The gateway may need ${WALLET_PRIVATE_KEY_ENV} in its service environment.`);
     }
   }
 
@@ -804,32 +758,6 @@ async function cmdSetup(args) {
   const existingConfig = readConfig();
   removeLegacyWalletPrivateKey(pluginConfig);
   setPluginConfig(existingConfig, pluginConfig);
-
-  if (!existingConfig.agents || typeof existingConfig.agents !== "object") {
-    existingConfig.agents = {};
-  }
-  if (!existingConfig.agents.defaults) existingConfig.agents.defaults = {};
-  if (!existingConfig.agents.defaults.heartbeat || typeof existingConfig.agents.defaults.heartbeat !== "object") {
-    existingConfig.agents.defaults.heartbeat = {};
-  }
-  if (!Array.isArray(existingConfig.agents.list)) {
-    existingConfig.agents.list = [];
-  }
-  const heartbeatPrompt =
-    "Read HEARTBEAT.md (workspace context). Follow it strictly — execute the full trading cycle and report results to the user. Do NOT reply HEARTBEAT_OK. Always produce a visible summary of what you checked and did.";
-  const defaultHeartbeatEvery = "30m";
-  const hasMainAgent = existingConfig.agents.list.some((a) => a && a.id === "main");
-  if (!hasMainAgent) {
-    existingConfig.agents.list.push({ id: "main", default: true, heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } });
-  } else {
-    const mainAgent = existingConfig.agents.list.find((a) => a.id === "main");
-    if (!mainAgent.heartbeat) mainAgent.heartbeat = { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt };
-    else mainAgent.heartbeat.prompt = heartbeatPrompt;
-  }
-  if (!existingConfig.cron || typeof existingConfig.cron !== "object") {
-    existingConfig.cron = { enabled: true, maxConcurrentRuns: 2, sessionRetention: "24h" };
-  }
-
   writeConfig(existingConfig);
 
   printSuccess(`  Config written to ${CONFIG_FILE}`);
@@ -941,62 +869,6 @@ async function cmdSetup(args) {
     printWarn("  The startup sequence will block before trading until credentials are active.");
   }
 
-  if (writeGatewayEnvFlag && lastSeenWalletPrivateKey) {
-    if (process.platform !== "linux" || process.env.WSL_DISTRO_NAME) {
-      printWarn(
-        "  --write-gateway-env is for Linux (non-WSL) systemd user gateways; skipped on this platform.",
-      );
-    } else {
-      try {
-        const { writeTraderclawGatewayWalletEnv } = await import("./gateway-persistence-linux.mjs");
-        writeTraderclawGatewayWalletEnv(lastSeenWalletPrivateKey);
-        printSuccess(
-          `  Wrote ${WALLET_PRIVATE_KEY_ENV} for the systemd user gateway (see ~/.config/systemd/user/openclaw-gateway.service.d/).`,
-        );
-        printInfo("  Run: openclaw gateway restart");
-      } catch (err) {
-        printWarn(`  Could not write gateway wallet env file: ${err.message || err}`);
-      }
-    }
-  } else if (writeGatewayEnvFlag && !lastSeenWalletPrivateKey) {
-    printWarn("  --write-gateway-env skipped: no wallet private key was available this session.");
-  }
-
-  if (!noEnsureGatewayPersistent) {
-    try {
-      const { ensureLinuxGatewayPersistence, isLinuxGatewayPersistenceEligible } = await import(
-        "./gateway-persistence-linux.mjs",
-      );
-      if (isLinuxGatewayPersistenceEligible()) {
-        print("\nGateway persistence (Linux)...\n");
-        await ensureLinuxGatewayPersistence({
-          emitLog: (level, text) => {
-            if (level === "warn") printWarn(`  ${text}`);
-            else printInfo(`  ${text}`);
-          },
-        });
-      }
-    } catch (err) {
-      printWarn(`  Gateway persistence (optional): ${err.message || err}`);
-    }
-  }
-
-  try {
-    const { deployWorkspaceHeartbeat } = await import("./installer-step-engine.mjs");
-    print("\nWorkspace HEARTBEAT.md...\n");
-    const hb = deployWorkspaceHeartbeat({ pluginPackage: NPM_PACKAGE_NAME });
-    if (hb.deployed) {
-      printSuccess(`  Installed HEARTBEAT.md → ${hb.dest}`);
-    } else if (hb.skipped) {
-      printInfo(`  HEARTBEAT.md already exists at ${hb.dest} — left unchanged.`);
-    } else {
-      printWarn(`  Could not install HEARTBEAT.md automatically (${hb.reason || "unknown"})`);
-      if (hb.src) printInfo(`  Expected source: ${hb.src}`);
-    }
-  } catch (err) {
-    printWarn(`  HEARTBEAT.md workspace install: ${err.message || err}`);
-  }
-
   print("\n" + "=".repeat(60));
   printSuccess("\n  Setup complete!\n");
   print("=".repeat(60));
@@ -1016,7 +888,7 @@ async function cmdSetup(args) {
     `  For the OpenClaw gateway (Telegram/agent tools), the same env must be set on the gateway service — not only in this shell. See: ${TRADERCLAW_SESSION_TROUBLESHOOTING_URL}`,
   );
   print("Next steps:");
-  print("  1. Install the plugin:     openclaw plugins install solana-traderclaw (or: npm install -g solana-traderclaw)");
+  print("  1. Install the plugin:     openclaw plugins install traderclaw-team-v1 (or: npm install -g traderclaw-team-v1)");
   print("  2. Restart the gateway:    openclaw gateway --restart");
   print("  3. Start trading:          Ask OpenClaw to scan for opportunities");
   print("");
@@ -1026,32 +898,6 @@ async function cmdSetup(args) {
   print("  traderclaw logout     Revoke current session");
   print("  traderclaw config     View current configuration");
   print("");
-}
-
-async function cmdGateway(args) {
-  const sub = args[0];
-  if (sub === "ensure-persistent") {
-    const { ensureLinuxGatewayPersistence } = await import("./gateway-persistence-linux.mjs");
-    print("\nTraderClaw — gateway persistence (Linux)\n");
-    const result = await ensureLinuxGatewayPersistence({
-      emitLog: (level, text) => {
-        if (level === "warn") printWarn(`  ${text}`);
-        else printInfo(`  ${text}`);
-      },
-    });
-    if (result.skipped) {
-      printInfo(`  Skipped: ${result.reason || "not applicable"}`);
-      return;
-    }
-    if (result.errors?.length) {
-      printWarn(`  Completed with notes: ${result.errors.join("; ")}`);
-    } else {
-      printSuccess("  Done. Gateway should survive SSH disconnect; use: openclaw gateway restart");
-    }
-    return;
-  }
-  printError("Unknown gateway subcommand. Try: traderclaw gateway ensure-persistent");
-  process.exit(1);
 }
 
 async function cmdLogin(args) {
@@ -1412,10 +1258,6 @@ function parseInstallWizardArgs(args) {
     gatewayToken: "",
     enableTelegram: false,
     telegramToken: "",
-    xConsumerKey: "",
-    xConsumerSecret: "",
-    xAccessTokenMain: "",
-    xAccessTokenMainSecret: "",
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -1565,19 +1407,6 @@ async function cmdPrecheck(args) {
       log.pass("openclaw gateway status command succeeded");
     } catch {
       log.warn("openclaw gateway status returned non-zero");
-    }
-    try {
-      const { getLinuxGatewayPersistenceSnapshot } = await import("./gateway-persistence-linux.mjs");
-      const snap = getLinuxGatewayPersistenceSnapshot();
-      if (snap.eligible && snap.linger !== true) {
-        log.warn(
-          "systemd user linger not enabled — gateway may stop after SSH disconnect; run: traderclaw gateway ensure-persistent",
-        );
-      } else if (snap.eligible && snap.linger === true) {
-        log.pass("systemd user linger enabled (SSH-safe gateway)");
-      }
-    } catch {
-      log.warn("could not check systemd user linger (optional)");
     }
   } else {
     log.warn("skipping gateway status check (openclaw missing)");
@@ -1790,31 +1619,6 @@ function wizardHtml(defaults) {
           </div>
         </div>
       </div>
-      <div class="card" id="xCard">
-        <h3>Optional: X (Twitter) OAuth 1.0a</h3>
-        <p class="muted">Skip this section to use trading and Telegram without X. When set, app keys plus user access token enable the <code>main</code> agent profile (journal &amp; engagement tools).</p>
-        <div class="grid">
-          <div>
-            <label>X consumer key (optional)</label>
-            <input id="xConsumerKey" type="password" autocomplete="off" placeholder="From your X Developer App" />
-          </div>
-          <div>
-            <label>X consumer secret (optional)</label>
-            <input id="xConsumerSecret" type="password" autocomplete="off" />
-          </div>
-        </div>
-        <div class="grid" style="margin-top:12px;">
-          <div>
-            <label>X access token — main profile (optional)</label>
-            <input id="xAccessTokenMain" type="password" autocomplete="off" placeholder="User access token for the posting account" />
-          </div>
-          <div>
-            <label>X access token secret — main profile (optional)</label>
-            <input id="xAccessTokenMainSecret" type="password" autocomplete="off" />
-          </div>
-        </div>
-        <p class="muted">If you use X: create an app at <a href="https://developer.x.com" target="_blank" rel="noopener noreferrer">developer.x.com</a> with OAuth 1.0a Read and Write, and fill all four fields above (or leave all blank). Values are written to <code>openclaw.json</code> under the plugin <code>x</code> block.</p>
-      </div>
       <div class="card" id="startCard">
         <div class="grid">
           <div>
@@ -1920,11 +1724,6 @@ function wizardHtml(defaults) {
       const llmLoadingHintTextEl = document.getElementById("llmLoadingHintText");
       const startBtn = document.getElementById("start");
       const llmCardEl = document.getElementById("llmCard");
-      const xCardEl = document.getElementById("xCard");
-      const xConsumerKeyEl = document.getElementById("xConsumerKey");
-      const xConsumerSecretEl = document.getElementById("xConsumerSecret");
-      const xAccessTokenMainEl = document.getElementById("xAccessTokenMain");
-      const xAccessTokenMainSecretEl = document.getElementById("xAccessTokenMainSecret");
       const startCardEl = document.getElementById("startCard");
       const statusCardEl = document.getElementById("statusCard");
       const logsCardEl = document.getElementById("logsCard");
@@ -1938,7 +1737,6 @@ function wizardHtml(defaults) {
       let announcedFunnelAdminUrl = "";
       let pollTimer = null;
       let pollIntervalMs = 1200;
-      let installLocked = false;
 
       function hasRequiredInputs() {
         return (
@@ -1949,32 +1747,8 @@ function wizardHtml(defaults) {
         );
       }
 
-      /** All-or-nothing: 0 or 4 non-empty X fields; partial is invalid. */
-      function xWizardFieldsStatus() {
-        const fields = [
-          xConsumerKeyEl.value.trim(),
-          xConsumerSecretEl.value.trim(),
-          xAccessTokenMainEl.value.trim(),
-          xAccessTokenMainSecretEl.value.trim(),
-        ];
-        const filled = fields.filter(Boolean).length;
-        return { filled, total: 4, ok: filled === 0 || filled === 4 };
-      }
-
       function updateStartButtonState() {
-        if (installLocked) {
-          startBtn.disabled = true;
-          startBtn.setAttribute("aria-busy", "true");
-          if (!llmCatalogLoading) {
-            startBtn.textContent = "Installation in progress…";
-          }
-          return;
-        }
-        startBtn.removeAttribute("aria-busy");
-        startBtn.disabled = llmCatalogLoading || !hasRequiredInputs() || !xWizardFieldsStatus().ok;
-        if (!llmCatalogLoading) {
-          startBtn.textContent = "Start Installation";
-        }
+        startBtn.disabled = !hasRequiredInputs();
       }
 
       function stopLlmLoadTicker() {
@@ -2009,6 +1783,7 @@ function wizardHtml(defaults) {
         }
         stopLlmLoadTicker();
         llmLoadingHintEl.classList.add("hidden");
+        startBtn.textContent = "Start Installation";
         llmLoadStartedAt = 0;
         llmModelEl.disabled = !llmModelManualEl.checked;
         updateStartButtonState();
@@ -2089,7 +1864,6 @@ function wizardHtml(defaults) {
       function setCheckoutMode(enabled) {
         if (enabled) {
           llmCardEl.classList.add("hidden");
-          xCardEl.classList.add("hidden");
           startCardEl.classList.add("hidden");
           statusCardEl.classList.add("hidden");
           logsCardEl.classList.add("hidden");
@@ -2097,7 +1871,6 @@ function wizardHtml(defaults) {
           return;
         }
         llmCardEl.classList.remove("hidden");
-        xCardEl.classList.remove("hidden");
         startCardEl.classList.remove("hidden");
         statusCardEl.classList.remove("hidden");
         logsCardEl.classList.remove("hidden");
@@ -2122,11 +1895,7 @@ function wizardHtml(defaults) {
           llmModel: llmModelManualEl.checked ? llmModelEl.value.trim() : "",
           llmCredential: llmCredentialEl.value.trim(),
           apiKey: document.getElementById("apiKey").value.trim(),
-          telegramToken: document.getElementById("telegramToken").value.trim(),
-          xConsumerKey: xConsumerKeyEl.value.trim(),
-          xConsumerSecret: xConsumerSecretEl.value.trim(),
-          xAccessTokenMain: xAccessTokenMainEl.value.trim(),
-          xAccessTokenMainSecret: xAccessTokenMainSecretEl.value.trim(),
+          telegramToken: document.getElementById("telegramToken").value.trim()
         };
         if (!payload.llmProvider || !payload.llmCredential) {
           stateEl.textContent = "blocked";
@@ -2140,17 +1909,6 @@ function wizardHtml(defaults) {
           manualEl.textContent = "Telegram bot token is required before starting installation.";
           return;
         }
-        const xStatus = xWizardFieldsStatus();
-        if (!xStatus.ok) {
-          stateEl.textContent = "blocked";
-          readyEl.textContent = "";
-          manualEl.textContent =
-            "X (Twitter) credentials are optional: leave all four fields blank, or fill consumer key, consumer secret, access token, and access token secret.";
-          return;
-        }
-
-        installLocked = true;
-        updateStartButtonState();
 
         try {
           const res = await fetch("/api/start", {
@@ -2161,8 +1919,6 @@ function wizardHtml(defaults) {
           const data = await res.json().catch(() => ({}));
 
           if (!res.ok) {
-            installLocked = false;
-            updateStartButtonState();
             stateEl.textContent = "failed";
             manualEl.textContent = data.error ? "Failed to start: " + data.error : "Failed to start installation.";
             readyEl.textContent = "";
@@ -2174,8 +1930,6 @@ function wizardHtml(defaults) {
           announcedFunnelAdminUrl = "";
           await refresh();
         } catch (err) {
-          installLocked = false;
-          updateStartButtonState();
           stateEl.textContent = "failed";
           manualEl.textContent = "Failed to start installation: " + (err && err.message ? err.message : String(err));
           readyEl.textContent = "";
@@ -2193,8 +1947,6 @@ function wizardHtml(defaults) {
         const res = await fetch("/api/state");
         const data = await res.json();
         stateEl.textContent = data.status || "idle";
-        const st = data.status || "idle";
-        installLocked = st === "running" || st === "completed";
 
         const steps = data.stepResults || [];
         const stepDone = (id) => steps.some((r) => r.stepId === id && r.status === "completed");
@@ -2294,7 +2046,6 @@ function wizardHtml(defaults) {
           stepsEl.appendChild(tr);
         });
         logsEl.textContent = (data.logs || []).map((l) => "[" + l.at + "] " + l.stepId + " " + l.level + " " + l.text).join("\\n");
-        updateStartButtonState();
       }
 
       async function finishWizardServer() {
@@ -2354,10 +2105,6 @@ function wizardHtml(defaults) {
       });
       llmCredentialEl.addEventListener("input", updateStartButtonState);
       telegramTokenEl.addEventListener("input", updateStartButtonState);
-      xConsumerKeyEl.addEventListener("input", updateStartButtonState);
-      xConsumerSecretEl.addEventListener("input", updateStartButtonState);
-      xAccessTokenMainEl.addEventListener("input", updateStartButtonState);
-      xAccessTokenMainSecretEl.addEventListener("input", updateStartButtonState);
       loadLlmCatalog();
       setPollInterval(1200);
       refresh();
@@ -2374,9 +2121,9 @@ async function cmdInstall(args) {
   }
 
   const defaults = parseInstallWizardArgs(args);
-  const { createInstallerStepEngine, assertWizardXCredentials } = await import("./installer-step-engine.mjs");
+  const { createInstallerStepEngine } = await import("./installer-step-engine.mjs");
   const modeConfig = {
-    pluginPackage: "solana-traderclaw",
+    pluginPackage: "traderclaw-team-v1",
     pluginId: "solana-trader",
     cliName: "traderclaw",
     gatewayConfig: "gateway-v1.json5",
@@ -2479,30 +2226,6 @@ async function cmdInstall(args) {
       }
 
       const body = await parseJsonBody(req).catch(() => ({}));
-      const wizardOpts = {
-        mode: "light",
-        lane: defaults.lane,
-        llmProvider: body.llmProvider || defaults.llmProvider,
-        llmModel: body.llmModel || defaults.llmModel,
-        llmCredential: body.llmCredential || defaults.llmCredential,
-        apiKey: body.apiKey || defaults.apiKey,
-        orchestratorUrl: defaults.orchestratorUrl,
-        gatewayBaseUrl: defaults.gatewayBaseUrl,
-        gatewayToken: defaults.gatewayToken,
-        enableTelegram: true,
-        telegramToken: body.telegramToken || defaults.telegramToken,
-        autoInstallDeps: true,
-        xConsumerKey: body.xConsumerKey ?? defaults.xConsumerKey,
-        xConsumerSecret: body.xConsumerSecret ?? defaults.xConsumerSecret,
-        xAccessTokenMain: body.xAccessTokenMain ?? defaults.xAccessTokenMain,
-        xAccessTokenMainSecret: body.xAccessTokenMainSecret ?? defaults.xAccessTokenMainSecret,
-      };
-      const xErr = assertWizardXCredentials(modeConfig, wizardOpts);
-      if (xErr) {
-        respondJson(400, { ok: false, error: xErr });
-        return;
-      }
-
       running = true;
       runtime.status = "running";
       runtime.logs = [];
@@ -2527,10 +2250,6 @@ async function cmdInstall(args) {
           enableTelegram: true,
           telegramToken: body.telegramToken || defaults.telegramToken,
           autoInstallDeps: true,
-          xConsumerKey: wizardOpts.xConsumerKey,
-          xConsumerSecret: wizardOpts.xConsumerSecret,
-          xAccessTokenMain: wizardOpts.xAccessTokenMain,
-          xAccessTokenMainSecret: wizardOpts.xAccessTokenMainSecret,
         },
         {
           onStepEvent: (evt) => {
@@ -2607,7 +2326,6 @@ Commands:
   signup             Create a new account (alias for: setup --signup; run locally, not via the agent)
   precheck           Run environment checks (dry-run or allow-install)
   install            Launch installer flows (--wizard for localhost GUI)
-  gateway            Gateway helpers (see subcommands below)
   login              Re-authenticate (uses refresh token when valid; full challenge only if needed)
   logout             Revoke current session and clear tokens
   status             Check connection health and wallet status
@@ -2624,11 +2342,6 @@ Setup options:
   --show-api-key     Extra hint after signup (full key is always shown once; confirm with API_KEY_STORED)
   --show-wallet-private-key  Reveal full wallet private key in setup output
   --signup           Force signup flow (create new account)
-  --write-gateway-env  Write TRADERCLAW_WALLET_PRIVATE_KEY to a systemd EnvironmentFile for the user gateway (Linux)
-  --no-ensure-gateway-persistent  Skip automatic Linux loginctl linger + user unit enable after setup
-
-Gateway subcommands:
-  gateway ensure-persistent   Linux: enable loginctl linger and systemd --user unit for OpenClaw gateway
 
 Login options:
   --wallet-private-key <k>  Base58 key for wallet proof when the server requires it (runtime only)
@@ -2648,7 +2361,6 @@ Examples:
   traderclaw precheck --allow-install
   traderclaw install --wizard
   traderclaw install --wizard --lane quick-local
-  traderclaw gateway ensure-persistent
   traderclaw setup --signup --user-id my_agent_001
   traderclaw setup --api-key oc_xxx --url https://api.traderclaw.ai
   traderclaw setup --gateway-base-url https://gateway.myhost.ts.net
@@ -2687,9 +2399,6 @@ async function main() {
       break;
     case "install":
       await cmdInstall(args.slice(1));
-      break;
-    case "gateway":
-      await cmdGateway(args.slice(1));
       break;
     case "login":
       await cmdLogin(args.slice(1));

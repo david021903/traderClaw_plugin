@@ -87,6 +87,7 @@ function ensureTelegramGroupPolicyOpenForWizard(configPath = CONFIG_FILE) {
   if (tg.groupPolicy === "open") return { changed: false };
 
   tg.groupPolicy = "open";
+  ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   return { changed: true };
@@ -200,6 +201,29 @@ function gatewayModeUnsetRemediation() {
     "4) openclaw gateway restart",
     "5) openclaw gateway status --json",
   ].join("\n");
+}
+
+function gatewayConfigValidationRemediation() {
+  return [
+    "OpenClaw could not load or validate ~/.openclaw/openclaw.json after plugins are enabled (often an Ajv/schema compile error in the OpenClaw CLI, not invalid JSON syntax).",
+    "The first `openclaw config validate` in this installer runs before plugins install; validation must be re-run once plugin schemas are registered — that is why this can appear only at gateway.",
+    "On the VPS, try in order:",
+    "1) openclaw --version",
+    "2) npm install -g openclaw@latest",
+    "3) openclaw config validate",
+    "4) openclaw plugins doctor",
+    "5) cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.bak.$(date +%s) || true",
+    "If it still fails, report the OpenClaw version plus output of steps 3–4 to OpenClaw/TraderClaw support (redact secrets).",
+  ].join("\n");
+}
+
+function isOpenClawConfigSchemaFailure(text) {
+  const t = String(text || "").toLowerCase();
+  return (
+    t.includes("ajv implementation")
+    || t.includes("validatejsonschemavalue")
+    || (t.includes("failed to read config") && t.includes("ajv"))
+  );
 }
 
 function runCommandWithEvents(cmd, args = [], opts = {}) {
@@ -583,8 +607,8 @@ function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
 }
 
 /**
- * Six managed cron jobs with prescriptive tool chains (VPS report 2026-03-24).
- * Replaces vague one-line templates so the agent actually invokes tools.
+ * Managed cron jobs with prescriptive tool chains (VPS report 2026-03-24).
+ * Schedules are staggered (minutes :00 / :15 / :30 / :45) where possible to avoid pile-ups.
  * @param {string} agentId
  * @returns {Array<{ id: string, schedule: string, agentId: string, message: string, enabled: boolean }>}
  */
@@ -595,7 +619,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 * * * *",
       agentId,
       message:
-        "CRON_JOB: alpha_scan. You are running the hourly alpha scan. Do these steps in order: 1) Call solana_scan_launches to get the latest token launches. 2) For each token with volume > $20K and market cap > $50K, call solana_token_snapshot to get full stats. 3) Call solana_token_risk for any token that passes the snapshot check. 4) If a token passes all filters (risk score acceptable, liquidity sufficient, holder distribution healthy), call solana_token_holders and solana_token_flows for deep analysis. 5) Score qualifying tokens using your strategy weights from solana_strategy_state. 6) If any token scores above your entry threshold, execute via solana_trade with proper position sizing. 7) Call solana_daily_log with a summary of what you scanned, how many tokens passed each filter stage, and any trades executed. Do NOT just describe what you would do — actually call the tools.",
+        "CRON_JOB: alpha_scan — Call solana_scan_launches to find new token launches from the last hour. For each candidate, call solana_token_snapshot to check price, volume, and age. Filter for: 24h volume above 50000 USD, market cap above 10000 USD. For tokens that pass, call solana_token_holders to check holder distribution (skip if top holder owns more than 30 percent), then solana_token_risk to check for mint/freeze authority (hard skip if present). If a token passes all checks, use solana_trade_precheck and consider trade execution using solana_trade_execute. Log all scanned tokens and results using solana_memory_write. Do not ask questions.",
       enabled: true,
     },
     {
@@ -603,7 +627,15 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 */2 * * *",
       agentId,
       message:
-        "CRON_JOB: dead_money_sweep. You are running the dead money sweep. Do these steps: 1) Call solana_state_load to get all open positions. 2) For each open position, call solana_token_snapshot to get current price and volume. 3) Identify dead money: positions where price has not moved >5% in either direction for 4+ hours, OR volume has dropped below $5K, OR the token is trending toward zero with no recovery signals. 4) For any dead money position, execute an exit via solana_trade (sell). 5) Call solana_daily_log with what you found and any exits executed. Do NOT just list positions — actually check each one and act on dead money.",
+        "CRON_JOB: dead_money_sweep — Check all open LOCAL_MANAGED positions for dead money. Exit stale positions. Tag as dead_money.",
+      enabled: true,
+    },
+    {
+      id: "risk-audit",
+      schedule: "30 */2 * * *",
+      agentId,
+      message:
+        "CRON_JOB: portfolio_risk_audit — Portfolio stress tests, exposure checks, correlation analysis, drawdown monitoring. Produce risk report for CTO.",
       enabled: true,
     },
     {
@@ -611,7 +643,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 */3 * * *",
       agentId,
       message:
-        "CRON_JOB: source_reputation_recalc. You are recalculating alpha source reputation scores. Do these steps: 1) Call solana_alpha_history to get recent signal history (last 7 days). 2) Call solana_alpha_sources to get current per-source performance stats. 3) For each source, calculate: win rate (signals that led to profitable trades vs total signals), average return, signal-to-noise ratio (quality signals vs spam). 4) Call solana_memory_search for 'source_reputation' to get existing reputation data. 5) Update reputation scores: call solana_memory_write with category 'source_reputation' for each source with updated stats. 6) Flag any source whose win rate dropped below 30% or whose signals consistently fail filters. 7) Call solana_daily_log with reputation changes. Actually compute and write — do not just describe the process.",
+        "CRON_JOB: source_reputation_recalc — Analyze which alpha signal sources led to wins vs losses. Update reputation tracking in memory.",
       enabled: true,
     },
     {
@@ -619,7 +651,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "30 */3 * * *",
       agentId,
       message:
-        "CRON_JOB: meta_rotation_analysis. You are analyzing narrative/meta rotation in the memecoin market. Do these steps: 1) Call x_search_tweets with queries for trending memecoin narratives (e.g. 'solana memecoin', 'new meta', 'pump fun') to see what people are talking about. 2) Call solana_scan_launches to see what categories of tokens are launching (AI, animals, political, celebrity, etc). 3) Call solana_memory_search for 'meta_rotation' to get your previous rotation observations. 4) Analyze: which narratives are heating up (increasing launches + social volume)? Which are cooling down (fewer launches, declining interest)? Are there any new narratives emerging? 5) Call solana_memory_write with category 'meta_rotation' documenting: hot narratives, cooling narratives, emerging narratives, and any rotation signals. 6) Call solana_daily_log with your rotation analysis. Do the actual research — do not just list categories.",
+        "CRON_JOB: meta_rotation_analysis — Analyze narrative clusters across recent scans and trades. Identify hot vs cooling metas. Write observations to memory.",
       enabled: true,
     },
     {
@@ -627,7 +659,23 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 */4 * * *",
       agentId,
       message:
-        "CRON_JOB: strategy_evolution. You are running the strategy evolution cycle (SKILL.md Step 9). Do these steps: 1) Call solana_journal_summary to review recent trade performance, win rate, and patterns. 2) Call solana_strategy_state to see current feature weights and strategy version. 3) Call solana_memory_search for 'pre_trade_rationale' to review your recent decision reasoning. 4) Call solana_memory_search for patterns like 'momentum_win', 'bad_liquidity', 'late_entry' to find what features predicted wins vs losses. 5) Analyze which weights need adjustment based on evidence. 6) If you have 20+ closed trades since last evolution: call solana_strategy_update with adjusted weights (respect anti-drift guardrails: max delta ±0.10, floor 0.02, cap 0.40, sum 0.95-1.05). Increment strategy version. 7) Call solana_memory_write with category 'strategy_evolution' documenting your reasoning. 8) Call solana_daily_log with evolution results. Only update weights if evidence supports it.",
+        "CRON_JOB: strategy_evolution — Review trade journal, compute weight adjustments, update strategy. Only update if sufficient closed trades have accumulated.",
+      enabled: true,
+    },
+    {
+      id: "subscription-cleanup",
+      schedule: "15 * * * *",
+      agentId,
+      message:
+        "CRON_JOB: subscription_cleanup — Check active Bitquery subscriptions. Unsubscribe from streams no longer needed (sold tokens, closed positions).",
+      enabled: true,
+    },
+    {
+      id: "whale-watch",
+      schedule: "45 */2 * * *",
+      agentId,
+      message:
+        "CRON_JOB: whale_activity_scan — Scan for large wallet movements, deployer activity, accumulation patterns. Detect smart money consensus and fresh wallet surges.",
       enabled: true,
     },
     {
@@ -635,7 +683,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 4 * * *",
       agentId,
       message:
-        "CRON_JOB: daily_performance_report. You are generating the daily performance report. Do these steps: 1) Call solana_state_load to get current portfolio state (positions, capital, realized PnL). 2) Call solana_journal_summary to get trade performance stats. 3) Call solana_memory_search for 'meta_rotation' to get current market narrative state. 4) Call solana_memory_search for 'source_reputation' to get alpha source performance. 5) Compile a daily summary: total PnL (realized + unrealized), number of trades, win rate, best/worst trade, current open positions, capital remaining, strategy version, market regime. 6) Post the summary to X using x_post_tweet on the solana-trader profile. Keep under 280 chars — focus on key stats (PnL, win rate, trades, regime). 7) Call solana_daily_log with the full detailed report. Make it data-driven — actual numbers, not vague descriptions.",
+        "CRON_JOB: daily_performance_report — Calculate daily PnL, aggregate win/loss stats, source reputation summary, write comprehensive memory entry.",
       enabled: true,
     },
   ];
@@ -760,6 +808,7 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     config.channels.defaults.heartbeat.showOk = true;
   }
 
+  ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 
@@ -795,6 +844,7 @@ function ensureOpenResponsesEnabled(configPath = CONFIG_FILE) {
   if (!config.gateway.http.endpoints.responses) config.gateway.http.endpoints.responses = {};
   config.gateway.http.endpoints.responses.enabled = true;
 
+  ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   return configPath;
@@ -954,6 +1004,7 @@ function seedXConfig(modeConfig, configPath = CONFIG_FILE, wizardOpts = {}) {
     }
   }
 
+  ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   return { configured: true, consumerKey: "***", profilesFound, agentIds };
@@ -1019,6 +1070,7 @@ function persistXProfileIdentities(configPath, modeConfig, identities) {
     if (touched) profilesTouched++;
   }
   if (profilesTouched === 0) return { written: 0 };
+  ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   return { written: profilesTouched };
@@ -1085,9 +1137,10 @@ function resolveLlmModelSelection(provider, requestedModel) {
 }
 
 /**
- * OpenClaw 2026+ validates `agents.defaults` with Zod/Ajv: if `defaults` exists it must include
- * `heartbeat` and `model` objects. `openclaw plugins install/enable` can merge config and drop
- * these keys, which surfaces as obscure stack errors (e.g. "ajv implementation error") on the next CLI call.
+ * OpenClaw 2026+ expects `agents.defaults.heartbeat` as an object when `defaults` exists; plugin merges
+ * sometimes drop it. We only add `heartbeat: {}` here — do NOT add `model: {}` when `model` is absent:
+ * many schemas require `model.primary` whenever `model` is present; an empty model object caused Ajv
+ * failures after hardening (regression for installs where the plugin stripped `model` but left defaults).
  */
 function ensureAgentsDefaultsSchemaCompat(config) {
   if (!config || typeof config !== "object") return;
@@ -1096,8 +1149,9 @@ function ensureAgentsDefaultsSchemaCompat(config) {
   if (!config.agents.defaults.heartbeat || typeof config.agents.defaults.heartbeat !== "object") {
     config.agents.defaults.heartbeat = {};
   }
-  if (!config.agents.defaults.model || typeof config.agents.defaults.model !== "object") {
-    config.agents.defaults.model = {};
+  const m = config.agents.defaults.model;
+  if (m !== undefined && m !== null && (typeof m !== "object" || Array.isArray(m))) {
+    delete config.agents.defaults.model;
   }
 }
 
@@ -1160,6 +1214,9 @@ function configureOpenClawLlmProvider({ provider, model, credential }, configPat
   if (!config.agents) config.agents = {};
   if (!config.agents.defaults) config.agents.defaults = {};
   ensureAgentsDefaultsSchemaCompat(config);
+  if (!config.agents.defaults.model || typeof config.agents.defaults.model !== "object") {
+    config.agents.defaults.model = {};
+  }
   config.agents.defaults.model.primary = model;
 
   mkdirSync(CONFIG_DIR, { recursive: true });
@@ -1464,6 +1521,7 @@ export class InstallerStepEngine {
       return { attempted: true, success: false, reason: "no_missing_gateway_defaults" };
     }
 
+    ensureAgentsDefaultsSchemaCompat(config);
     mkdirSync(CONFIG_DIR, { recursive: true });
     const backupPath = `${CONFIG_FILE}.bak.${Date.now()}`;
     writeFileSync(backupPath, rawOriginal, "utf-8");
@@ -1613,6 +1671,19 @@ export class InstallerStepEngine {
         await this.runStep("tailscale_up", "Connecting Tailscale", async () => this.runTailscaleUp());
       }
       if (!this.options.skipGatewayBootstrap) {
+        await this.runStep("openclaw_config_validate", "Validating OpenClaw config (with plugins)", async () => {
+          normalizeOpenClawConfigFileShape(CONFIG_FILE);
+          try {
+            await this.runWithPrivilegeGuidance("openclaw_config_validate", "openclaw", ["config", "validate"]);
+          } catch (err) {
+            const blob = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`;
+            if (isOpenClawConfigSchemaFailure(blob)) {
+              throw new Error(gatewayConfigValidationRemediation());
+            }
+            throw err;
+          }
+          return { ok: true };
+        });
         await this.runStep("gateway_bootstrap", "Starting OpenClaw gateway and Funnel", async () => {
           try {
             normalizeOpenClawConfigFileShape(CONFIG_FILE);
@@ -1636,6 +1707,9 @@ export class InstallerStepEngine {
                 throw new Error(gatewayModeUnsetRemediation());
               }
               throw new Error(gatewayTimeoutRemediation());
+            }
+            if (isOpenClawConfigSchemaFailure(text)) {
+              throw new Error(gatewayConfigValidationRemediation());
             }
             throw err;
           }
