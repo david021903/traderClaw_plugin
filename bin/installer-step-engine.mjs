@@ -1,16 +1,16 @@
 import { execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
-import { getLinuxGatewayPersistenceSnapshot } from "./gateway-persistence-linux.mjs";
 
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 
-/** Older `plugins.entries` keys / npm-era ids to merge orchestrator URL for. */
-const LEGACY_TRADER_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1", "solana-trader"];
+/** Older npm / plugin ids that may linger in ~/.openclaw/extensions on upgrades. */
+const LEGACY_TRADER_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1"];
 
 function stripAnsi(text) {
   if (typeof text !== "string") return text;
@@ -260,7 +260,7 @@ function backupExistingPluginDir(pluginId, onEvent) {
 async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorUrl) {
   // `openclaw plugins install` calls writeConfigFile *during* the command. Plugin config schema
   // requires orchestratorUrl — so we must seed it *before* install, not only after.
-  // Also merge legacy plugins.entries.* (see LEGACY_TRADER_PLUGIN_IDS) so old configs still validate.
+  // Also merge legacy plugins.entries.solana-trader (v1.0.3-era id) so old extensions don't fail validation.
   mkdirSync(CONFIG_DIR, { recursive: true });
   mkdirSync(join(CONFIG_DIR, "extensions"), { recursive: true });
 
@@ -352,127 +352,6 @@ function seedPluginConfig(modeConfig, orchestratorUrl, configPath = CONFIG_FILE)
   return configPath;
 }
 
-/**
- * Resolve OpenClaw cron job store path (same rules as Gateway: optional cron.store, ~ expansion).
- * @param {Record<string, unknown>} config
- * @returns {string}
- */
-function resolveCronJobsStorePath(config) {
-  const raw = config?.cron?.store;
-  if (typeof raw === "string" && raw.trim()) {
-    let t = raw.trim();
-    if (t.startsWith("~")) {
-      t =
-        t === "~" || t === "~/" ? homedir() : join(homedir(), t.slice(2).replace(/^\/+/, ""));
-    }
-    if (t.startsWith("/") || (process.platform === "win32" && /^[A-Za-z]:[\\/]/.test(t))) {
-      return t;
-    }
-    return join(CONFIG_DIR, t);
-  }
-  return join(CONFIG_DIR, "cron", "jobs.json");
-}
-
-function cronJobStableId(job) {
-  if (!job || typeof job !== "object") return "";
-  const id = typeof job.id === "string" ? job.id.trim() : "";
-  if (id) return id;
-  const legacy = typeof job.jobId === "string" ? job.jobId.trim() : "";
-  return legacy;
-}
-
-/**
- * Build a cron job record compatible with OpenClaw 2026+ store normalization (see ~/.openclaw/cron/jobs.json).
- * @param {{ id: string, schedule: string, agentId: string, message: string, enabled?: boolean }} def
- */
-function buildOpenClawCronStoreJob(def) {
-  const nameFromId = def.id
-    .split("-")
-    .map((w) => (w.length ? w.charAt(0).toUpperCase() + w.slice(1) : w))
-    .join(" ");
-  return {
-    id: def.id,
-    name: nameFromId.length <= 60 ? nameFromId : nameFromId.slice(0, 59) + "…",
-    enabled: def.enabled !== false,
-    schedule: { kind: "cron", expr: def.schedule },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    agentId: def.agentId,
-    payload: {
-      kind: "agentTurn",
-      message: def.message,
-      lightContext: true,
-    },
-    // OpenClaw: "none" = no channel post; announce + last = summary to user's last chat (see OpenClaw cron delivery docs)
-    delivery: { mode: "announce", channel: "last", bestEffort: true },
-    state: {},
-  };
-}
-
-/**
- * Merge TraderClaw template cron jobs into the Gateway cron store (upsert by job id).
- * Preserves user-defined jobs whose ids are not in the template set.
- * @returns {{ storePath: string, added: number, updated: number, preserved: number, totalManaged: number }}
- */
-function mergeTraderCronJobsIntoStore(storePath, templateJobs) {
-  const managedIds = new Set(templateJobs.map((j) => j.id).filter(Boolean));
-  let existing = { version: 1, jobs: [] };
-  try {
-    const raw = readFileSync(storePath, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const jobs = Array.isArray(parsed.jobs) ? parsed.jobs.filter(Boolean) : [];
-      existing = { version: 1, jobs };
-    }
-  } catch (err) {
-    if (err && err.code === "ENOENT") {
-      // New store file — only TraderClaw template jobs.
-    } else {
-      return {
-        storePath,
-        added: 0,
-        updated: 0,
-        preserved: 0,
-        totalManaged: templateJobs.length,
-        error: err?.message || String(err),
-        wrote: false,
-      };
-    }
-  }
-
-  const beforeKeys = new Set();
-  for (const j of existing.jobs) {
-    const k = cronJobStableId(j);
-    if (k) beforeKeys.add(k);
-  }
-
-  const preserved = existing.jobs.filter((j) => !managedIds.has(cronJobStableId(j)));
-  const built = templateJobs.map((def) => buildOpenClawCronStoreJob(def));
-  const next = { version: 1, jobs: [...preserved, ...built] };
-
-  let added = 0;
-  let updated = 0;
-  for (const id of managedIds) {
-    if (beforeKeys.has(id)) updated += 1;
-    else added += 1;
-  }
-
-  const dir = dirname(storePath);
-  mkdirSync(dir, { recursive: true });
-  const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", "utf-8");
-  renameSync(tmp, storePath);
-
-  return {
-    storePath,
-    added,
-    updated,
-    preserved: preserved.length,
-    totalManaged: templateJobs.length,
-    wrote: true,
-  };
-}
-
 function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
   let config = {};
   try {
@@ -502,19 +381,13 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
 
   const isV2 = modeConfig.pluginId === "solana-trader-v2";
 
-  const heartbeatPrompt =
-    "Read HEARTBEAT.md (workspace context). Follow it strictly — execute the full trading cycle and report results to the user. Do NOT reply HEARTBEAT_OK. Always produce a visible summary of what you checked and did.";
-
-  /** Default periodic wake interval for TraderClaw installs (was 5m; stretched to reduce load). */
-  const defaultHeartbeatEvery = "30m";
-
   const v1Agents = [
-    { id: "main", default: true, heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } }
+    { id: "main", default: true, heartbeat: { every: "30m", target: "last" } }
   ];
   const v2Agents = [
-    { id: "cto", default: true, heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } },
-    { id: "execution-specialist", heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } },
-    { id: "alpha-signal-analyst", heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } },
+    { id: "cto", default: true, heartbeat: { every: "30m", target: "last" } },
+    { id: "execution-specialist", heartbeat: { every: "30m", target: "last" } },
+    { id: "alpha-signal-analyst", heartbeat: { every: "30m", target: "last" } },
     { id: "onchain-analyst" },
     { id: "social-analyst" },
     { id: "smart-money-tracker" },
@@ -619,21 +492,16 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 
-  const cronStorePath = resolveCronJobsStorePath(config);
-  const cronMerge = mergeTraderCronJobsIntoStore(cronStorePath, targetJobs);
-
   return {
     configPath,
     agentsConfigured: targetAgents.length,
-    cronJobsAdded: cronMerge.added,
-    cronJobsUpdated: cronMerge.updated,
+    cronJobsAdded: 0,
+    cronJobsUpdated: 0,
     cronJobsTotal: targetJobs.length,
-    cronJobsStorePath: cronMerge.storePath,
-    cronJobsStoreWriteOk: cronMerge.wrote === true,
-    cronJobsStoreError: cronMerge.error,
+    cronJobsManagedExternally: true,
     removedLegacyCronJobs,
     hooksConfigured: config.hooks.mappings.length,
-    isV2,
+    isV2
   };
 }
 
@@ -676,64 +544,6 @@ function deployGatewayConfig(modeConfig) {
   if (!existsSync(src)) return { deployed: false, dest: destFile };
   writeFileSync(destFile, readFileSync(src));
   return { deployed: true, source: src, dest: destFile };
-}
-
-function expandHomePath(p) {
-  if (typeof p !== "string" || !p.trim()) return null;
-  let t = p.trim();
-  if (t.startsWith("~")) {
-    t = t === "~" || t === "~/" ? homedir() : join(homedir(), t.slice(2).replace(/^\/+/, ""));
-  }
-  return t;
-}
-
-/**
- * OpenClaw loads HEARTBEAT.md only from the agent workspace root (default ~/.openclaw/workspace).
- * See https://docs.openclaw.ai/concepts/agent-workspace
- */
-export function resolveAgentWorkspaceDir(configPath = CONFIG_FILE) {
-  let config = {};
-  try {
-    config = JSON.parse(readFileSync(configPath, "utf-8"));
-  } catch {
-    config = {};
-  }
-  const raw =
-    (typeof config.agents?.defaults?.workspace === "string" && config.agents.defaults.workspace.trim()) ||
-    (typeof config.agent?.workspace === "string" && config.agent.workspace.trim()) ||
-    "";
-  if (raw) {
-    const expanded = expandHomePath(raw);
-    if (expanded) return expanded;
-  }
-  return join(homedir(), ".openclaw", "workspace");
-}
-
-/**
- * Copy skills/solana-trader/HEARTBEAT.md from the globally installed npm package into the workspace root.
- * Skips overwrite if a non-empty file already exists (user may have customized it).
- */
-export function deployWorkspaceHeartbeat(modeConfig) {
-  const npmRoot = getCommandOutput("npm root -g");
-  if (!npmRoot) return { deployed: false, reason: "npm_root_g_failed" };
-  const src = join(npmRoot, modeConfig.pluginPackage, "skills", "solana-trader", "HEARTBEAT.md");
-  if (!existsSync(src)) return { deployed: false, reason: "source_missing", src };
-
-  const workspaceDir = resolveAgentWorkspaceDir(CONFIG_FILE);
-  const dest = join(workspaceDir, "HEARTBEAT.md");
-  mkdirSync(workspaceDir, { recursive: true });
-
-  if (existsSync(dest)) {
-    try {
-      if (statSync(dest).size > 0) {
-        return { deployed: false, skipped: true, reason: "already_exists_nonempty", dest };
-      }
-    } catch {
-      // overwrite empty or unreadable
-    }
-  }
-  writeFileSync(dest, readFileSync(src, "utf-8"), "utf-8");
-  return { deployed: true, skipped: false, source: src, dest };
 }
 
 function listProviderModels(provider) {
@@ -880,20 +690,6 @@ function verifyInstallation(modeConfig, apiKey) {
   } catch {
   }
 
-  const persistSnap = getLinuxGatewayPersistenceSnapshot();
-  let persistOk = true;
-  let persistNote = "not Linux / WSL or loginctl unavailable";
-  if (persistSnap.eligible) {
-    persistOk = persistSnap.linger === true;
-    persistNote =
-      persistSnap.linger === true
-        ? "linger enabled"
-        : "run: traderclaw gateway ensure-persistent (or sudo loginctl enable-linger $USER)";
-  }
-
-  const workspaceRoot = resolveAgentWorkspaceDir();
-  const heartbeatInWorkspace = existsSync(join(workspaceRoot, "HEARTBEAT.md"));
-
   return [
     { label: "OpenClaw platform", ok: commandExists("openclaw"), note: "not in PATH" },
     { label: `Trading CLI (${modeConfig.cliName})`, ok: commandExists(modeConfig.cliName), note: "not in PATH" },
@@ -903,18 +699,47 @@ function verifyInstallation(modeConfig, apiKey) {
     { label: "Gateway configuration", ok: existsSync(gatewayFile), note: "not found" },
     { label: "Heartbeat scheduling", ok: heartbeatConfigured, note: "agent will not wake autonomously" },
     { label: "Cron jobs configured", ok: cronConfigured, note: "scheduled maintenance jobs missing" },
+    { label: "HEARTBEAT.md deployed", ok: existsSync(join(CONFIG_DIR, "workspace", "HEARTBEAT.md")), note: "agent will reply HEARTBEAT_OK and not trade autonomously" },
     { label: "API key configured", ok: !!apiKey, note: "needs setup" },
-    {
-      label: "Gateway survives SSH (systemd linger)",
-      ok: !persistSnap.eligible || persistOk,
-      note: persistNote,
-    },
-    {
-      label: "HEARTBEAT.md in workspace root",
-      ok: heartbeatInWorkspace,
-      note: heartbeatInWorkspace ? workspaceRoot : `expected ${join(workspaceRoot, "HEARTBEAT.md")}`,
-    },
   ];
+}
+
+function deployHeartbeatTemplate() {
+  const workspaceDir = join(CONFIG_DIR, "workspace");
+  mkdirSync(workspaceDir, { recursive: true });
+  const dest = join(workspaceDir, "HEARTBEAT.md");
+
+  if (existsSync(dest)) {
+    const existing = readFileSync(dest, "utf-8").trim();
+    const isShippedTemplate = existing.startsWith("# Trading Heartbeat") && existing.includes("Never reply HEARTBEAT_OK");
+    if (existing.length > 0 && !isShippedTemplate) {
+      return { deployed: false, reason: "user_customized", dest };
+    }
+  }
+
+  const npmRoot = getCommandOutput("npm root -g");
+  if (!npmRoot) return { deployed: false, reason: "npm_root_not_found", dest };
+
+  const candidatePaths = [
+    join(npmRoot, "traderclaw-team-v2", "skills", "solana-trader", "HEARTBEAT.md"),
+    join(npmRoot, "traderclaw-team-v1", "skills", "solana-trader", "HEARTBEAT.md"),
+  ];
+
+  let src = null;
+  for (const p of candidatePaths) {
+    if (existsSync(p)) { src = p; break; }
+  }
+
+  if (!src) {
+    const thisBinDir = dirname(fileURLToPath(import.meta.url));
+    const skillDir = join(thisBinDir, "..", "skills", "solana-trader", "HEARTBEAT.md");
+    if (existsSync(skillDir)) src = skillDir;
+  }
+
+  if (!src) return { deployed: false, reason: "source_not_found", dest };
+
+  copyFileSync(src, dest);
+  return { deployed: true, source: src, dest };
 }
 
 function nowIso() {
@@ -1318,16 +1143,6 @@ export class InstallerStepEngine {
         });
       }
 
-      if (!this.options.skipGatewayBootstrap) {
-        await this.runStep("gateway_persistence", "SSH-safe gateway (systemd user linger)", async () => {
-          const { ensureLinuxGatewayPersistence } = await import("./gateway-persistence-linux.mjs");
-          return ensureLinuxGatewayPersistence({
-            emitLog: (level, text) => this.emitLog("gateway_persistence", level, text),
-            runPrivileged: (cmd, args) => this.runWithPrivilegeGuidance("gateway_persistence", cmd, args),
-          });
-        });
-      }
-
       await this.runStep("enable_responses", "Enabling /v1/responses endpoint", async () => {
         const configPath = ensureOpenResponsesEnabled(CONFIG_FILE);
         const restart = await restartGateway();
@@ -1337,21 +1152,7 @@ export class InstallerStepEngine {
       await this.runStep("gateway_scheduling", "Configuring heartbeat and cron schedules", async () => {
         const result = configureGatewayScheduling(this.modeConfig, CONFIG_FILE);
         this.emitLog("gateway_scheduling", "info", `Agents configured: ${result.agentsConfigured}`);
-        if (result.cronJobsStoreWriteOk) {
-          this.emitLog(
-            "gateway_scheduling",
-            "info",
-            `Cron store: ${result.cronJobsStorePath} (${result.cronJobsTotal} TraderClaw jobs; +${result.cronJobsAdded} new, ~${result.cronJobsUpdated} updated).`,
-          );
-        } else if (result.cronJobsStoreError) {
-          this.emitLog(
-            "gateway_scheduling",
-            "warn",
-            `Cron store not updated (${result.cronJobsStorePath}): ${result.cronJobsStoreError}`,
-          );
-        } else {
-          this.emitLog("gateway_scheduling", "warn", "Cron store write did not complete; check permissions and disk space.");
-        }
+        this.emitLog("gateway_scheduling", "info", `Cron jobs target: ${result.cronJobsTotal} (managed by OpenClaw cron store/CLI).`);
         if (result.removedLegacyCronJobs) {
           this.emitLog("gateway_scheduling", "warn", "Removed legacy 'cron.jobs' from openclaw.json to keep config validation compatible.");
         }
@@ -1360,22 +1161,14 @@ export class InstallerStepEngine {
         return { ...result, restart };
       });
 
-      await this.runStep("workspace_heartbeat", "Installing HEARTBEAT.md into agent workspace", async () => {
-        const result = deployWorkspaceHeartbeat(this.modeConfig);
+      await this.runStep("deploy_heartbeat", "Deploying HEARTBEAT.md to workspace", async () => {
+        const result = deployHeartbeatTemplate();
         if (result.deployed) {
-          this.emitLog("workspace_heartbeat", "info", `Installed TraderClaw HEARTBEAT.md → ${result.dest}`);
-        } else if (result.skipped) {
-          this.emitLog(
-            "workspace_heartbeat",
-            "info",
-            `HEARTBEAT.md already present at ${result.dest} — not overwriting (edit or delete to replace).`,
-          );
+          this.emitLog("deploy_heartbeat", "info", `HEARTBEAT.md deployed to ${result.dest}`);
+        } else if (result.reason === "user_customized") {
+          this.emitLog("deploy_heartbeat", "info", `HEARTBEAT.md already customized by user at ${result.dest} — skipping.`);
         } else {
-          this.emitLog(
-            "workspace_heartbeat",
-            "warn",
-            `Could not install HEARTBEAT.md automatically (${result.reason || "unknown"})${result.src ? `. Expected: ${result.src}` : ""}`,
-          );
+          this.emitLog("deploy_heartbeat", "warn", `Could not deploy HEARTBEAT.md (${result.reason}). The agent may reply HEARTBEAT_OK and not trade autonomously.`);
         }
         return result;
       });

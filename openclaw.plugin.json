@@ -1,7 +1,7 @@
 {
   "id": "solana-trader",
   "name": "Solana Trader",
-  "description": "Autonomous Solana memecoin trading agent plugin — connects OpenClaw to a trading orchestrator for scanning, analysis, risk management, and execution.",
+  "description": "Team edition V1-Upgraded — Solana trading agent with X/Twitter journal & engagement, standardized tool envelopes, intelligence lab, prompt injection scrubbing, and split skill architecture. Full V1 trading capabilities plus 17 new intelligence tools.",
   "skills": ["skills/solana-trader"],
   "configSchema": {
     "type": "object",
@@ -14,15 +14,16 @@
       },
       "walletId": {
         "type": "string",
-        "description": "Wallet ID for this agent's trading account (UUID string from the orchestrator API)"
+        "format": "uuid",
+        "description": "Wallet ID (UUID string) for this agent's trading account"
       },
       "apiKey": {
         "type": "string",
-        "description": "API key from traderclaw signup / setup or https://traderclaw.ai/register — set on this machine via CLI, not by the agent"
+        "description": "API key obtained from signup or https://traderclaw.ai/register"
       },
       "externalUserId": {
         "type": "string",
-        "description": "Optional external user ID for CLI signup (traderclaw signup); auto-generated if omitted"
+        "description": "External user ID for signup (auto-generated if not provided)"
       },
       "refreshToken": {
         "type": "string",
@@ -32,11 +33,15 @@
         "type": "string",
         "description": "Solana wallet public key (auto-populated after session establishment)"
       },
+      "walletPrivateKey": {
+        "type": "string",
+        "description": "Solana wallet private key in base58 (only needed for re-auth when wallet already exists on account)"
+      },
       "apiTimeout": {
         "type": "integer",
         "minimum": 1000,
         "maximum": 120000,
-        "default": 80000,
+        "default": 30000,
         "description": "HTTP request timeout in milliseconds"
       },
       "agentId": {
@@ -50,6 +55,53 @@
       "gatewayToken": {
         "type": "string",
         "description": "Bearer token used by orchestrator when calling your Gateway /v1/responses."
+      },
+      "workspaceDir": {
+        "type": "string",
+        "description": "Override workspace directory path. Defaults to ~/.openclaw/workspace/ or OPENCLAW_WORKSPACE_DIR env var."
+      },
+      "bootstrapDecisionCount": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "default": 10,
+        "description": "Number of recent decisions to include in bootstrap digest"
+      },
+      "bootstrapBulletinWindowHours": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 168,
+        "default": 24,
+        "description": "Hours of bulletin entries to include in bootstrap digest"
+      },
+      "dailyLogRetentionDays": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 365,
+        "default": 30,
+        "description": "Number of days to retain daily log files before pruning"
+      },
+      "x": {
+        "type": "object",
+        "description": "X/Twitter configuration for journal & engagement tools",
+        "properties": {
+          "consumerKey": { "type": "string", "description": "X App consumer key (shared across all agents)" },
+          "consumerSecret": { "type": "string", "description": "X App consumer secret" },
+          "profiles": {
+            "type": "object",
+            "description": "Per-agent X profiles. Keys are agent IDs.",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "accessToken": { "type": "string" },
+                "accessTokenSecret": { "type": "string" },
+                "userId": { "type": "string" },
+                "username": { "type": "string" }
+              },
+              "required": ["accessToken", "accessTokenSecret"]
+            }
+          }
+        }
       }
     }
   },
@@ -81,6 +133,12 @@
       "label": "Wallet Public Key",
       "advanced": true
     },
+    "walletPrivateKey": {
+      "label": "Wallet Private Key",
+      "placeholder": "base58 encoded private key",
+      "sensitive": true,
+      "advanced": true
+    },
     "apiTimeout": {
       "label": "API Timeout (ms)",
       "advanced": true
@@ -98,6 +156,23 @@
     "gatewayToken": {
       "label": "Gateway Token",
       "sensitive": true,
+      "advanced": true
+    },
+    "workspaceDir": {
+      "label": "Workspace Directory",
+      "placeholder": "~/.openclaw/workspace",
+      "advanced": true
+    },
+    "bootstrapDecisionCount": {
+      "label": "Bootstrap Decision Count",
+      "advanced": true
+    },
+    "bootstrapBulletinWindowHours": {
+      "label": "Bulletin Window (hours)",
+      "advanced": true
+    },
+    "dailyLogRetentionDays": {
+      "label": "Daily Log Retention (days)",
       "advanced": true
     }
   }
