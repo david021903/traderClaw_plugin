@@ -85,7 +85,7 @@ At start of every cron job, check whether sufficient new data exists since last 
 
 **Tools:** `solana_positions`, `solana_token_snapshot`, `solana_trade_execute` (for exits), `solana_trade_review`, `solana_memory_write`, `solana_sweep_dead_tokens` (sell losing positions below threshold — use `dryRun: true` first to preview, then without to execute)
 
-**PnL check:** Use `unrealizedPnlSol` / `realizedPnlSol` for SOL-denominated PnL. The fields without the `Sol` suffix are USD.
+**PnL check:** For Solana positions, use `unrealizedPnl` / `realizedPnl` from `solana_positions`. Those fields are SOL-native on that endpoint.
 
 **Report to user:** List positions exited as dead money with hold duration and loss amount. Include any rent SOL recovered from sweep.
 

@@ -277,7 +277,7 @@ Start real-time price monitoring for the position. This gives you live price dat
 
 ## STEP 6: MONITOR POSITIONS
 
-For each open position: check PnL, SL/TP proximity, flow direction. **Use `unrealizedPnlSol` for SOL PnL** — the `unrealizedPnl` field (no suffix) is USD. **Use `unrealizedReturnPct`** for trailing stop level matching (no manual math).
+For each open position: check PnL, SL/TP proximity, flow direction. **Use `unrealizedPnl` for SOL PnL** on `solana_positions`. **Use `unrealizedReturnPct`** for trailing stop level matching (no manual math).
 
 **On-chain verification:** If any position balance looks inconsistent, call `solana_wallet_token_balance` with the token mint to verify actual on-chain holdings.
 
@@ -377,7 +377,7 @@ NEXT CYCLE: [1 sentence — what you're watching for]
 
 **MANDATORY FORMAT RULES:**
 - Every token MUST be SYMBOL (full_contract_address). NO EXCEPTIONS. "BERENSTAIN" alone is INVALID. It must be "BERENSTAIN (full_CA_here)".
-- PnL numbers must come from `solana_positions` or `solana_trade_review` tool output — always read `unrealizedPnlSol` / `realizedPnlSol` for SOL values. NEVER calculate PnL manually. NEVER estimate. If the tool didn't return it, say "PnL: pending".
+- PnL numbers must come from `solana_positions` or `solana_trade_review` tool output — on `solana_positions`, always read `unrealizedPnl` / `realizedPnl` for SOL values. NEVER calculate PnL manually. NEVER estimate. If the tool didn't return it, say "PnL: pending".
 - Capital must come from `solana_capital_status`. NEVER estimate capital.
 - The DEEP ANALYSIS section is MANDATORY. Omitting it is a violation. If you used zero advanced tools, say so explicitly (e.g., "none — no FRESH tokens"). Lying about tool usage is worse than not using the tools.
 - Keep under 60 lines. This is a cycle summary, not a session essay.

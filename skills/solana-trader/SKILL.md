@@ -427,7 +427,7 @@ Daily logs auto-loaded. Bootstrap hook injects state digest, decision digest, bu
 3. **Sell parameters** — `sellPct` only (integer 1–100). Do not send raw token amounts or `sizeSol` for sells.
 4. **`/api/scan/new-launches`** — In paper/test mode, may return canned data or a small set of real tokens. This is expected.
 5. **`tpLevels` alone** — Each level sells 100% of position. Use `tpExits` for partial sells.
-6. **PnL fields are dual-currency** — `realizedPnl`/`unrealizedPnl` = USD. `realizedPnlSol`/`unrealizedPnlSol` = SOL. Always use the `*Sol` fields for SOL-denominated reporting. See refs/api-reference.md § PnL Field Clarification.
+6. **Solana positions PnL is SOL-native** — on `/api/wallet/positions`, use `realizedPnl` / `unrealizedPnl` directly for Solana reporting. Aggregate capital endpoints still expose mixed USD/SOL fields. See refs/api-reference.md § PnL Field Clarification.
 7. **`slExits`** — Multi-level stop-loss with partial exits. Same format as `tpExits`: `[{ percent, amountPct }]`. Takes precedence over `slPct`. See refs/api-reference.md § slExits Parameter.
 8. **`trailingStop` levels array** — Structured trailing stop uses `{ levels: [{ percentage, amount?, triggerAboveATH? }] }` format. `triggerAboveATH` is a number (default `100` = 2× ATH), NOT a boolean. See refs/api-reference.md § Trailing Stop Parameter.
 9. **`unrealizedReturnPct`** — Positions endpoint returns this field: percentage return since entry. Use for trailing stop level matching.

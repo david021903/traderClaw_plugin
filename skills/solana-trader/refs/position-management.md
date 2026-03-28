@@ -6,7 +6,7 @@ Check periodically:
 - `solana_positions` — unrealized PnL, current price vs entry
 - `solana_capital_status` — portfolio-level health
 
-**PnL field usage:** Always use `unrealizedPnlSol` / `realizedPnlSol` for SOL-denominated reporting. The fields `unrealizedPnl` / `realizedPnl` (without the Sol suffix) are USD values. See refs/api-reference.md § PnL Field Clarification.
+**PnL field usage:** For Solana positions, use `unrealizedPnl` / `realizedPnl` directly. Those fields are SOL-native on `/api/wallet/positions`. See refs/api-reference.md § PnL Field Clarification.
 
 **`unrealizedReturnPct`:** Positions also return `unrealizedReturnPct` — the percentage return since entry (e.g., `25.5` = +25.5%). Use this for trailing stop level matching and FOMO checks instead of calculating manually from price fields.
 

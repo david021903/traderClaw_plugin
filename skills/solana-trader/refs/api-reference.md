@@ -38,7 +38,7 @@ All authenticated endpoints use `Authorization: Bearer <accessToken>`.
 | `GET` | `/api/wallets` | — | List all wallets. Optional `?refresh=true` |
 | `POST` | `/api/wallet/create` | — | Create wallet. Optional: `label`, `publicKey`, `chain`, `ownerRef`, `includePrivateKey`. Status `201` |
 | `GET` | `/api/capital/status` | `?walletId=<uuid>` | Wallet capital and daily limits. **PnL:** `totalUnrealizedPnl` / `totalRealizedPnl` are **USD** (stored); `totalUnrealizedPnlSol` / `totalRealizedPnlSol` / `totalPnlSol` are **SOL** derived with `solPriceUsd` (agent-safe). |
-| `GET` | `/api/wallet/positions` | `?walletId=<uuid>` | Positions. **`realizedPnl` / `unrealizedPnl` = USD** in DB; use **`realizedPnlSol` / `unrealizedPnlSol`** for SOL. `unrealizedReturnPct` = ROI vs cost (for sweep). Optional `?status=` |
+| `GET` | `/api/wallet/positions` | `?walletId=<uuid>` | Positions. For **Solana wallets**, **`realizedPnl` / `unrealizedPnl` are SOL-native** on this endpoint. `unrealizedReturnPct` = ROI vs cost (for sweep). Optional `?status=` |
 | `GET` | `/api/funding/instructions` | `?walletId=<uuid>` | Deposit instructions |
 | `GET` | `/api/killswitch/status` | `?walletId=<uuid>` | Kill switch state |
 | `POST` | `/api/killswitch` | `walletId`, `enabled` | Toggle kill switch. Optional: `mode` |
@@ -146,13 +146,14 @@ The `/api/wallet/positions` endpoint returns `unrealizedReturnPct` on each posit
 
 ## PnL Field Clarification (USD vs SOL)
 
-The positions and trades endpoints return **both** USD and SOL PnL fields:
+The positions and trades endpoints do **not** use the same PnL contract:
 
 | Field | Currency | Use Case |
 |---|---|---|
-| `realizedPnl` | **USD** | Dollar-denominated realized profit/loss |
-| `unrealizedPnl` | **USD** | Dollar-denominated unrealized profit/loss |
-| `realizedPnlSol` | **SOL** | SOL-denominated realized profit/loss |
-| `unrealizedPnlSol` | **SOL** | SOL-denominated unrealized profit/loss |
+| `/api/wallet/positions` → `realizedPnl` | **SOL** | Solana realized profit/loss for position monitoring |
+| `/api/wallet/positions` → `unrealizedPnl` | **SOL** | Solana unrealized profit/loss for position monitoring |
+| `/api/trades` → `pnlSol` | **SOL** | Trade-level realized profit/loss |
+| `/api/capital/status` → `totalUnrealizedPnl` / `totalRealizedPnl` | **USD** | Wallet-level aggregate totals |
+| `/api/capital/status` → `totalUnrealizedPnlSol` / `totalRealizedPnlSol` / `totalPnlSol` | **SOL** | Wallet-level SOL view |
 
-**CRITICAL:** When reporting PnL in SOL (which is the standard for this agent), always use `realizedPnlSol` / `unrealizedPnlSol`. The fields `realizedPnl` / `unrealizedPnl` are in USD. Confusing these causes wildly incorrect PnL reports (e.g., reporting "$2.30 USD" as "2.30 SOL").
+**CRITICAL:** For Solana position monitoring, read `realizedPnl` / `unrealizedPnl` directly from `/api/wallet/positions`. Do **not** expect `realizedPnlSol` / `unrealizedPnlSol` on that endpoint.
