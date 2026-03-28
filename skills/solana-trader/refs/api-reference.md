@@ -45,7 +45,7 @@ All authenticated endpoints use `Authorization: Bearer <accessToken>`.
 | `GET` | `/api/strategy/state` | `?walletId=<uuid>` | Current strategy weights and mode |
 | `POST` | `/api/strategy/update` | `walletId`, `featureWeights` | Update weights. Optional: `strategyVersion`, `mode` |
 | `POST` | `/api/thesis/build` | `walletId`, `tokenAddress` | Build full thesis package |
-| `POST` | `/api/trade/precheck` | `walletId`, `tokenAddress`, `side`, `slippageBps` (REQUIRED) | Risk/policy check. Buy: `sizeSol` required, do NOT send `sizeTokens`/`sellPct`. Sell: exactly one of `sellPct` or `sizeTokens` (NOT `sizeSol`). `sellPct` preferred if both sent. |
+| `POST` | `/api/trade/precheck` | `walletId`, `tokenAddress`, `side`, `slippageBps` (REQUIRED) | Risk/policy check. Buy: `sizeSol` required, do NOT send `sellPct`. Sell: `sellPct` only (1–100) (NOT `sizeSol` or raw token amounts). |
 | `POST` | `/api/trade/execute` | `walletId`, `tokenAddress`, `side`, `slippageBps` (REQUIRED), `symbol` | Execute trade. Optional: `tpLevels[]`, `tpExits[]`, `slPct`, `slLevels[]`, `slExits[]`, `trailingStopPct` (simple) or `trailingStop` object. Header: `x-idempotency-key` |
 | `POST` | `/api/trade/review` | `walletId`, `outcome`, `notes` | Post-trade review. Optional: `tradeId`, `tokenAddress`, `pnlSol`, `tags[]`, `strategyVersion`. Status `201` |
 | `POST` | `/api/memory/write` | `walletId`, `notes` | Journal entry. Optional: `tokenAddress`, `outcome`, `tags[]`, `strategyVersion`. Status `201` |
@@ -84,7 +84,7 @@ All authenticated endpoints use `Authorization: Bearer <accessToken>`.
 - **Signup returns 201** (not 200)
 - **Session challenge/start return 201** (not 200)
 - **`strategyVersion`** must be strict semver or server returns 400
-- **`sellPct`** preferred for sells. If both `sellPct` and `sizeTokens` sent, `sellPct` wins. Never send `sizeSol` for sells.
+- **Sells** use `sellPct` only (integer 1–100, share of the open position). Do not send `sizeTokens` or `sizeSol` for sells.
 - **`tpLevels` alone** — each level sells 100% of position. Use `tpExits` for partial sells.
 - **`trailingStop` object** — structured alternative to `trailingStopPct` with `levels` array. If both are sent, the object takes precedence. `triggerAboveATH` is a number (default `100` = 2× ATH), NOT a boolean.
 - **`slLevels`** — array of stop-loss % levels (simple, each triggers 100% exit). Use `slExits` for partial sells.

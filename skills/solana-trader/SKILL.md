@@ -424,7 +424,7 @@ Daily logs auto-loaded. Bootstrap hook injects state digest, decision digest, bu
 
 1. **`managementMode` on trade/execute** — Advisory only. Server ignores it. Keep sending for forward compatibility.
 2. **`strategyVersion` on memory/write and trade/review** — Server enforces strict semver. Non-semver strings are rejected with 400.
-3. **Sell parameters** — `sellPct` is preferred. If both `sellPct` and `sizeTokens` are sent, `sellPct` wins. Never send `sizeSol` for sells.
+3. **Sell parameters** — `sellPct` only (integer 1–100). Do not send raw token amounts or `sizeSol` for sells.
 4. **`/api/scan/new-launches`** — In paper/test mode, may return canned data or a small set of real tokens. This is expected.
 5. **`tpLevels` alone** — Each level sells 100% of position. Use `tpExits` for partial sells.
 6. **PnL fields are dual-currency** — `realizedPnl`/`unrealizedPnl` = USD. `realizedPnlSol`/`unrealizedPnlSol` = SOL. Always use the `*Sol` fields for SOL-denominated reporting. See refs/api-reference.md § PnL Field Clarification.

@@ -73,7 +73,7 @@ HELD FOR: <duration>
 Call `solana_trade_execute` with:
 - `tokenAddress`, `side` ("buy" or "sell"), `symbol`
 - **For buy:** `sizeSol` (amount in SOL) — required
-- **For sell:** `sellPct` (1–100 where 100 = full exit) **or** `sizeTokens` — one required. If both sent, `sellPct` wins. Do NOT send `sizeSol` for sells.
+- **For sell:** `sellPct` (integer 1–100 where 100 = full exit) — required. Raw token amounts are not accepted on this endpoint. Do NOT send `sizeSol` for sells.
 - `slippageBps` (REQUIRED — scaled to liquidity, hard cap 800bps)
 - `slPct`, `slLevels` (simple multi-level, each triggers 100% exit), or `slExits` (graduated partial stop-losses — see refs/api-reference.md § slExits Parameter)
 - `tpLevels` or `tpExits` (partial take-profits)

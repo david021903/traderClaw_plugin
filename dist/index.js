@@ -1232,13 +1232,12 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_trade_precheck",
-      description: "Pre-trade risk check \u2014 validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade. Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens are ignored. Optional exit fields (trailingStopPct, trailingStop) are accepted to mirror execute payloads; sizing logic ignores them.",
+      description: "Pre-trade risk check \u2014 validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade. Buy: sizeSol required; do not send sellPct. Sell: sellPct only (integer 1\u2013100, share of open position); do not send sizeSol or raw token amounts. Optional exit fields (trailingStopPct, trailingStop) are accepted to mirror execute payloads; sizing logic ignores them.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
         sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL \u2014 required for buy, omit for sell" })),
-        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1\u2013100 (100 = full exit) \u2014 sell only; preferred over sizeTokens if both sent" })),
-        sizeTokens: Type.Optional(Type.Number({ description: "Token amount to sell \u2014 sell only; ignored if sellPct is also provided" })),
+        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1\u2013100 (100 = full exit) \u2014 required for sell" })),
         slippageBps: Type.Optional(Type.Number({ description: "Slippage tolerance in basis points (e.g., 300 = 3%)" })),
         trailingStopPct: Type.Optional(Type.Number({ description: "Optional \u2014 same as execute; ignored for policy sizing" })),
         trailingStop: Type.Optional(
@@ -1274,24 +1273,19 @@ var solanaTraderPlugin = {
         if (params.side === "buy") {
           body.sizeSol = params.sizeSol;
         } else {
-          if (params.sellPct !== void 0) {
-            body.sellPct = params.sellPct;
-          } else if (params.sizeTokens !== void 0) {
-            body.sizeTokens = params.sizeTokens;
-          }
+          body.sellPct = params.sellPct;
         }
         return post("/api/trade/precheck", body);
       })
     });
     api.registerTool({
       name: "solana_trade_execute",
-      description: "Execute a trade on Solana via the SpyFly bot. Enforces risk rules before proxying to on-chain execution. Returns trade ID, position ID, and transaction signature. IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain \u2014 use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%). Trailing: use `trailingStopPct` for a single simple trailing %, or `trailingStop.levels` (1\u20135) for multi-level trailing with optional `triggerAboveATH` per level (% above session ATH before that level arms; if omitted, server defaults to 100 i.e. 2\xD7 ATH). When both are sent, `trailingStop` wins. Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
+      description: "Execute a trade on Solana via the SpyFly bot. Enforces risk rules before proxying to on-chain execution. Returns trade ID, position ID, and transaction signature. IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain \u2014 use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%). Trailing: use `trailingStopPct` for a single simple trailing %, or `trailingStop.levels` (1\u20135) for multi-level trailing with optional `triggerAboveATH` per level (% above session ATH before that level arms; if omitted, server defaults to 100 i.e. 2\xD7 ATH). When both are sent, `trailingStop` wins. Buy: sizeSol required; do not send sellPct. Sell: sellPct only (integer 1\u2013100); do not send sizeSol or raw token amounts.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
         sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL \u2014 required for buy, do not send for sell" })),
-        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1\u2013100 (100 = full exit) \u2014 sell only. Preferred over sizeTokens if both sent." })),
-        sizeTokens: Type.Optional(Type.Number({ description: "Number of tokens to sell \u2014 sell only. Ignored if sellPct is also provided." })),
+        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1\u2013100 (100 = full exit) \u2014 required for sell" })),
         symbol: Type.String({ description: "Token symbol (e.g., BONK, WIF)" }),
         slippageBps: Type.Number({ description: "Slippage in basis points (REQUIRED, e.g., 300 = 3%)" }),
         slPct: Type.Optional(Type.Number({ description: "Stop-loss percentage (e.g., 20 = 20% below entry)" })),
@@ -1385,11 +1379,7 @@ var solanaTraderPlugin = {
         if (params.side === "buy") {
           body.sizeSol = params.sizeSol;
         } else {
-          if (params.sellPct !== void 0) {
-            body.sellPct = params.sellPct;
-          } else if (params.sizeTokens !== void 0) {
-            body.sizeTokens = params.sizeTokens;
-          }
+          body.sellPct = params.sellPct;
         }
         const tpExits = params.tpExits;
         const slExits = params.slExits;
@@ -1410,13 +1400,12 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_trade",
-      description: "Execute a trade on Solana. Shorthand for solana_trade_execute \u2014 same endpoint, same risk enforcement. Buy: sizeSol required. Sell: send sellPct or sizeTokens.",
+      description: "Execute a trade on Solana. Shorthand for solana_trade_execute \u2014 same endpoint, same risk enforcement. Buy: sizeSol required. Sell: sellPct only (1\u2013100).",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
         sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL \u2014 required for buy" })),
-        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1\u2013100 \u2014 sell only" })),
-        sizeTokens: Type.Optional(Type.Number({ description: "Number of tokens to sell \u2014 sell only" })),
+        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1\u2013100 \u2014 required for sell" })),
         symbol: Type.String({ description: "Token symbol (e.g., BONK, WIF)" }),
         slippageBps: Type.Number({ description: "Slippage in basis points (REQUIRED, e.g., 300 = 3%)" }),
         slPct: Type.Optional(Type.Number({ description: "Stop-loss percentage" })),
@@ -1434,8 +1423,7 @@ var solanaTraderPlugin = {
         if (params.side === "buy") {
           body.sizeSol = params.sizeSol;
         } else {
-          if (params.sellPct !== void 0) body.sellPct = params.sellPct;
-          else if (params.sizeTokens !== void 0) body.sizeTokens = params.sizeTokens;
+          body.sellPct = params.sellPct;
         }
         return post("/api/trade/execute", body);
       })
