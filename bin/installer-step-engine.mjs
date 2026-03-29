@@ -1195,11 +1195,21 @@ function listProviderModels(provider) {
 }
 
 function fallbackModelForProvider(provider) {
-  // When `openclaw models list` fails, use current API ids (verify vs provider docs periodically).
   if (provider === "anthropic") return "anthropic/claude-sonnet-4-6";
   if (provider === "openai") return "openai/gpt-5.4";
   if (provider === "openai-codex") return "openai-codex/gpt-5.4";
   if (provider === "google" || provider === "google-vertex") return "google/gemini-2.5-flash";
+  if (provider === "xai") return "xai/grok-4";
+  if (provider === "deepseek") return "deepseek/deepseek-chat";
+  if (provider === "together") return "together/moonshotai/Kimi-K2.5";
+  if (provider === "groq") return "groq/llama-4-scout-17b-16e-instruct";
+  if (provider === "mistral") return "mistral/mistral-large-latest";
+  if (provider === "perplexity") return "perplexity/sonar-pro";
+  if (provider === "nvidia") return "nvidia/llama-3.3-70b-instruct";
+  if (provider === "minimax") return "minimax/MiniMax-M2.7";
+  if (provider === "moonshot") return "moonshot/kimi-k2";
+  if (provider === "cerebras") return "cerebras/llama-4-scout-17b-16e-instruct";
+  if (provider === "qwen") return "qwen/qwen3-235b-a22b";
   return `${provider}/default`;
 }
 
@@ -1210,6 +1220,15 @@ function providerEnvKey(provider) {
   if (provider === "groq") return "GROQ_API_KEY";
   if (provider === "mistral") return "MISTRAL_API_KEY";
   if (provider === "google" || provider === "google-vertex") return "GEMINI_API_KEY";
+  if (provider === "xai") return "XAI_API_KEY";
+  if (provider === "deepseek") return "DEEPSEEK_API_KEY";
+  if (provider === "together") return "TOGETHER_API_KEY";
+  if (provider === "perplexity") return "PERPLEXITY_API_KEY";
+  if (provider === "nvidia") return "NVIDIA_API_KEY";
+  if (provider === "minimax") return "MINIMAX_API_KEY";
+  if (provider === "moonshot") return "MOONSHOT_API_KEY";
+  if (provider === "cerebras") return "CEREBRAS_API_KEY";
+  if (provider === "qwen") return "DASHSCOPE_API_KEY";
   return "";
 }
 
