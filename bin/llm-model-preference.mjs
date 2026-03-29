@@ -75,25 +75,35 @@ function anthropicPreferenceScore(modelId) {
   if (!meta) {
     return 1_000_000 + tieBreakerSnapshot(local);
   }
-  // Generation must dominate: a dated Haiku 4.5 snapshot must not beat Sonnet 4.6 (see Anthropic model lineup).
   const generation = meta.major * 10_000 + meta.minor;
   const v = VARIANT_WEIGHT[meta.variant] || 0;
   return generation * 1_000_000_000_000 + v + meta.snapshot;
 }
 
 function openaiFamilyScore(local) {
-  // Prefer GPT-5.x over 4.x over 3.5; higher minor (5.4 vs 5.2) wins; bare gpt-5 below explicit minors.
   const g5 = local.match(/^gpt-5(?:\.(\d+))?/);
   if (g5) {
     const sub = g5[1] ? Number.parseInt(g5[1], 10) : 0;
-    return 500 * 1_000_000_000 + sub * 1_000_000;
+    let s = 500 * 1_000_000_000 + sub * 1_000_000;
+    if (local.includes("pro") || local.includes("thinking")) s += 400_000;
+    else if (local.includes("nano")) s -= 200_000;
+    else if (local.includes("mini")) s -= 100_000;
+    else if (local.includes("instant")) s -= 150_000;
+    return s;
   }
-  if (local.startsWith("gpt-4o-mini")) return 480 * 1_000_000_000;
-  if (local.startsWith("gpt-4o")) return 485 * 1_000_000_000;
-  if (local.includes("gpt-4-turbo")) return 470 * 1_000_000_000;
-  if (local.startsWith("gpt-4")) return 460 * 1_000_000_000;
-  if (local.includes("gpt-3.5")) return 350 * 1_000_000_000;
-  if (local.includes("o3") || local.includes("o1")) return 420 * 1_000_000_000;
+  const oSeries = local.match(/^o(\d+)/);
+  if (oSeries) {
+    const gen = Number.parseInt(oSeries[1], 10);
+    let score = 490 * 1_000_000_000 + gen * 1_000_000;
+    if (local.includes("mini")) score -= 500_000;
+    if (local.includes("pro")) score += 200_000;
+    return score;
+  }
+  if (local.startsWith("gpt-4o-mini")) return 380 * 1_000_000_000;
+  if (local.startsWith("gpt-4o")) return 385 * 1_000_000_000;
+  if (local.includes("gpt-4-turbo")) return 370 * 1_000_000_000;
+  if (local.startsWith("gpt-4")) return 360 * 1_000_000_000;
+  if (local.includes("gpt-3.5")) return 250 * 1_000_000_000;
   return 100 * 1_000_000_000;
 }
 
@@ -102,7 +112,6 @@ function openaiPreferenceScore(modelId) {
   const local = raw.includes("/") ? raw.split("/").slice(1).join("/") : raw;
   let score = openaiFamilyScore(local);
   score += tieBreakerSnapshot(local);
-  // Small bump for non-preview stable names
   if (local.includes("preview")) score -= 50_000_000;
   return score;
 }
