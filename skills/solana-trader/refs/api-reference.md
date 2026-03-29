@@ -37,7 +37,7 @@ All authenticated endpoints use `Authorization: Bearer <accessToken>`.
 | `POST` | `/api/session/logout` | `refreshToken` | Revokes session |
 | `GET` | `/api/wallets` | — | List all wallets. Optional `?refresh=true` |
 | `POST` | `/api/wallet/create` | — | Create wallet. Optional: `label`, `publicKey`, `chain`, `ownerRef`, `includePrivateKey`. Status `201` |
-| `GET` | `/api/capital/status` | `?walletId=<uuid>` | Wallet capital and daily limits. **PnL:** `totalUnrealizedPnl` / `totalRealizedPnl` are **USD** (stored); `totalUnrealizedPnlSol` / `totalRealizedPnlSol` / `totalPnlSol` are **SOL** derived with `solPriceUsd` (agent-safe). |
+| `GET` | `/api/capital/status` | `?walletId=<uuid>` | Wallet capital and daily limits. For **Solana wallets**, **`totalUnrealizedPnl` / `totalRealizedPnl` / `totalPnl` are SOL-native** on this endpoint. |
 | `GET` | `/api/wallet/positions` | `?walletId=<uuid>` | Positions. For **Solana wallets**, **`realizedPnl` / `unrealizedPnl` are SOL-native** on this endpoint. `unrealizedReturnPct` = ROI vs cost (for sweep). Optional `?status=` |
 | `GET` | `/api/funding/instructions` | `?walletId=<uuid>` | Deposit instructions |
 | `GET` | `/api/killswitch/status` | `?walletId=<uuid>` | Kill switch state |
@@ -153,6 +153,6 @@ The positions and trades endpoints do **not** use the same PnL contract:
 | `/api/wallet/positions` → `realizedPnl` | **SOL** | Solana realized profit/loss for position monitoring |
 | `/api/wallet/positions` → `unrealizedPnl` | **SOL** | Solana unrealized profit/loss for position monitoring |
 | `/api/trades` → `pnlSol` | **SOL** | Trade-level realized profit/loss |
-| `/api/capital/status` → `totalUnrealizedPnl` / `totalRealizedPnl` | **SOL** | Wallet-level aggregate capital overview |
+| `/api/capital/status` → `totalUnrealizedPnl` / `totalRealizedPnl` / `totalPnl` | **SOL** | Wallet-level aggregate capital overview |
 
-**CRITICAL:** For Solana position monitoring, read `realizedPnl` / `unrealizedPnl` directly from `/api/wallet/positions`. Do **not** expect `realizedPnlSol` / `unrealizedPnlSol` on that endpoint.
+**CRITICAL:** For Solana monitoring, read `realizedPnl` / `unrealizedPnl` directly from `/api/wallet/positions` and `totalUnrealizedPnl` / `totalRealizedPnl` / `totalPnl` directly from `/api/capital/status`.

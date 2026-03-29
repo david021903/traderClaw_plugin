@@ -1051,7 +1051,7 @@ const solanaTraderPlugin = {
     api.registerTool({
       name: "solana_capital_status",
       description:
-        "Get your current capital status — SOL balance, open position count, unrealized/realized PnL, daily notional used, daily loss, and effective limits. **PnL:** `totalUnrealizedPnl` / `totalRealizedPnl` are USD (DB); use `totalUnrealizedPnlSol` / `totalRealizedPnlSol` / `totalPnlSol` for SOL (derived via `solPriceUsd`).",
+        "Get your current capital status — SOL balance, open position count, unrealized/realized PnL, daily notional used, daily loss, and effective limits. **PnL:** for Solana wallets, `totalUnrealizedPnl` / `totalRealizedPnl` / `totalPnl` are returned in SOL-native units.",
       parameters: Type.Object({}),
       execute: wrapExecute("solana_capital_status", async () =>
         get(`/api/capital/status?walletId=${walletId}`),
