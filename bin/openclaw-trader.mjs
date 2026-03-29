@@ -80,9 +80,49 @@ function stripAnsi(text) {
     .replace(/\x1b/g, "");
 }
 
+/**
+ * Extract and parse the first valid JSON object or array from a string that may contain
+ * non-JSON prefix/suffix text (e.g. progress lines OpenClaw prints to stdout before the JSON).
+ * Returns the parsed value or null.
+ */
+function extractJson(raw) {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const cleaned = stripAnsi(raw);
+
+  // Fast path: whole string is valid JSON
+  try { return JSON.parse(cleaned); } catch {}
+
+  // Scan for the first `{` (object) or `[` (array) and try to parse from there.
+  // We try both start positions and pick the one that comes first in the string.
+  const objIdx = cleaned.indexOf("{");
+  const arrIdx = cleaned.indexOf("[");
+
+  const candidates = [];
+  if (objIdx >= 0) candidates.push(objIdx);
+  if (arrIdx >= 0) candidates.push(arrIdx);
+  candidates.sort((a, b) => a - b);
+
+  for (const start of candidates) {
+    const slice = cleaned.slice(start);
+    try { return JSON.parse(slice); } catch {}
+
+    // If the tail has trailing garbage, trim from the right matching bracket.
+    const endChar = cleaned[start] === "{" ? "}" : "]";
+    const end = cleaned.lastIndexOf(endChar);
+    if (end > start) {
+      try { return JSON.parse(cleaned.slice(start, end + 1)); } catch {}
+    }
+  }
+
+  return null;
+}
+
+/** Env vars passed to every openclaw CLI invocation to suppress colour output. */
+const NO_COLOR_ENV = { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" };
+
 function getCommandOutput(cmd) {
   try {
-    return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], shell: true, maxBuffer: 50 * 1024 * 1024 }).trim();
+    return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], shell: true, maxBuffer: 50 * 1024 * 1024, env: NO_COLOR_ENV }).trim();
   } catch {
     return null;
   }
@@ -1794,8 +1834,10 @@ function loadWizardLlmCatalog() {
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 50 * 1024 * 1024,
       timeout: 30_000,
+      env: NO_COLOR_ENV,
     });
-    const parsed = JSON.parse(stripAnsi(raw));
+    const parsed = extractJson(raw);
+    if (!parsed) throw new Error(`Could not extract JSON from openclaw models list output (first 200 chars): ${stripAnsi(raw).slice(0, 200)}`);
     const models = Array.isArray(parsed?.models) ? parsed.models : [];
     const providerMap = new Map();
     for (const entry of models) {

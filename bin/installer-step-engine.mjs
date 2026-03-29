@@ -157,13 +157,42 @@ function normalizeTraderAllowlist(config, pluginId) {
 
 function stripAnsi(text) {
   if (typeof text !== "string") return text;
-  // Cover all ANSI/VT escape sequences: CSI, OSC, simple escapes, and lone ESC chars.
   return text
-    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")   // CSI sequences (colours, cursor, etc.)
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "") // OSC sequences
-    .replace(/\x1b[^[\]]/g, "")               // other 2-char escape sequences
-    .replace(/\x1b/g, "");                    // bare ESC survivors
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b[^[\]]/g, "")
+    .replace(/\x1b/g, "");
 }
+
+/**
+ * Extract and parse the first valid JSON object or array from a string that may contain
+ * non-JSON prefix/suffix lines (e.g. progress text OpenClaw prints before the JSON payload).
+ */
+function extractJson(raw) {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const cleaned = stripAnsi(raw);
+
+  try { return JSON.parse(cleaned); } catch {}
+
+  const objIdx = cleaned.indexOf("{");
+  const arrIdx = cleaned.indexOf("[");
+  const candidates = [objIdx, arrIdx].filter((i) => i >= 0).sort((a, b) => a - b);
+
+  for (const start of candidates) {
+    const slice = cleaned.slice(start);
+    try { return JSON.parse(slice); } catch {}
+    const endChar = cleaned[start] === "{" ? "}" : "]";
+    const end = cleaned.lastIndexOf(endChar);
+    if (end > start) {
+      try { return JSON.parse(cleaned.slice(start, end + 1)); } catch {}
+    }
+  }
+
+  return null;
+}
+
+/** Env vars for every openclaw CLI invocation to suppress colour output. */
+const NO_COLOR_ENV = { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" };
 
 /**
  * OpenClaw defaults Telegram to groupPolicy "allowlist" with empty groupAllowFrom, so Doctor warns on
@@ -206,7 +235,7 @@ function commandExists(cmd) {
 
 function getCommandOutput(cmd) {
   try {
-    return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], shell: true, maxBuffer: 50 * 1024 * 1024 }).trim();
+    return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], shell: true, maxBuffer: 50 * 1024 * 1024, env: NO_COLOR_ENV }).trim();
   } catch {
     return null;
   }
@@ -1188,15 +1217,12 @@ function listProviderModels(provider) {
   const cmd = `openclaw models list --all --provider ${shellQuote(provider)} --json`;
   const raw = getCommandOutput(cmd);
   if (!raw) return [];
-  try {
-    const parsed = JSON.parse(stripAnsi(raw));
-    const models = Array.isArray(parsed?.models) ? parsed.models : [];
-    return models
-      .map((entry) => (entry && typeof entry.key === "string" ? entry.key : ""))
-      .filter((id) => id.startsWith(`${provider}/`));
-  } catch {
-    return [];
-  }
+  const parsed = extractJson(raw);
+  if (!parsed) return [];
+  const models = Array.isArray(parsed?.models) ? parsed.models : [];
+  return models
+    .map((entry) => (entry && typeof entry.key === "string" ? entry.key : ""))
+    .filter((id) => id.startsWith(`${provider}/`));
 }
 
 function fallbackModelForProvider(provider) {
