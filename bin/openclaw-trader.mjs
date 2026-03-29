@@ -1793,9 +1793,15 @@ function loadWizardLlmCatalog() {
       generatedAt: new Date().toISOString(),
     };
   } catch (err) {
+    const detail = err?.message || String(err);
+    const isBufferErr = detail.includes("maxBuffer") || detail.includes("ENOBUFS");
+    const hint = isBufferErr
+      ? " (stdout exceeded buffer — OpenClaw model catalog may have grown; this version raises the limit)"
+      : "";
+    console.error(`[traderclaw] loadWizardLlmCatalog failed${hint}: ${detail.slice(0, 500)}`);
     return {
       ...fallback,
-      warning: `openclaw_models_list_failed: ${err?.message || String(err)}`,
+      warning: `openclaw_models_list_failed: ${detail}`,
     };
   }
 }
