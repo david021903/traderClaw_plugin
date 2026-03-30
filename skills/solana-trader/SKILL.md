@@ -274,7 +274,7 @@ Weights must sum to ~1.0. Evolve based on trade outcomes via `strategy_evolution
        ↓
 11. Step 8: MEMORY — state_save, daily_log, decision_log, team_bulletin_post, context_snapshot_write
        ↓
-12. Step 9: X POST — x_post_tweet
+12. Step 9: X POST — x_post_tweet *(beta — only available when `beta.xPosting: true` in plugin config)*
        ↓
 13. Step 10: REPORT — includes DEEP ANALYSIS section (Bitquery/intelligence lab/trust checks used)
        ↓

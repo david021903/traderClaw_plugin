@@ -84,6 +84,18 @@
         "default": 30,
         "description": "Number of days to retain daily log files before pruning"
       },
+      "beta": {
+        "type": "object",
+        "description": "Beta feature flags. Enable experimental capabilities that are not yet enabled by default.",
+        "properties": {
+          "xPosting": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable X/Twitter write tools: x_post_tweet and x_reply_tweet. Requires your X App permissions set to Read+Write and tokens regenerated. When false (default), only the 3 read tools are registered (x_read_mentions, x_search_tweets, x_get_thread)."
+          }
+        },
+        "additionalProperties": false
+      },
       "x": {
         "type": "object",
         "description": "X/Twitter configuration for read-only social intel tools",
@@ -181,6 +193,11 @@
     },
     "dailyLogRetentionDays": {
       "label": "Daily Log Retention (days)",
+      "advanced": true
+    },
+    "beta": {
+      "label": "Beta Features",
+      "description": "Enable experimental features. Set beta.xPosting: true to activate x_post_tweet and x_reply_tweet.",
       "advanced": true
     }
   }

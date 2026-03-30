@@ -59,6 +59,7 @@ interface PluginConfig {
   bootstrapBulletinWindowHours?: number;
   dailyLogRetentionDays?: number;
   xConfig?: XConfig;
+  beta?: { xPosting?: boolean };
 }
 
 function parseConfig(raw: unknown): PluginConfig {
@@ -84,6 +85,10 @@ function parseConfig(raw: unknown): PluginConfig {
   const dailyLogRetentionDays = typeof obj.dailyLogRetentionDays === "number" ? obj.dailyLogRetentionDays : 30;
   const recoverySecret = typeof obj.recoverySecret === "string" ? obj.recoverySecret : undefined;
   const xConfig = parseXConfig(obj) as XConfig;
+  const betaRaw = obj.beta && typeof obj.beta === "object" && !Array.isArray(obj.beta)
+    ? (obj.beta as Record<string, unknown>)
+    : {};
+  const beta = { xPosting: betaRaw.xPosting === true };
   return {
     orchestratorUrl,
     walletId,
@@ -102,6 +107,7 @@ function parseConfig(raw: unknown): PluginConfig {
     bootstrapBulletinWindowHours,
     dailyLogRetentionDays,
     xConfig,
+    beta,
   };
 }
 
@@ -2969,10 +2975,11 @@ const solanaTraderPlugin = {
       },
     });
 
-    registerXTools(api, Type, config.xConfig, config.agentId || "cto", "[solana-trader]");
+    registerXTools(api, Type, config.xConfig, config.agentId || "cto", "[solana-trader]", { enableWriteTools: config.beta?.xPosting ?? false });
     registerWebFetchTool(api, Type, "[solana-trader]");
 
-    const xToolCount = config.xConfig?.ok ? 3 : 0;
+    const xWriteEnabled = config.beta?.xPosting ?? false;
+    const xToolCount = config.xConfig?.ok ? (xWriteEnabled ? 5 : 3) : 0;
     const webFetchCount = 1;
     const intelligenceToolCount = 17;
     const baseToolCount = 76;
