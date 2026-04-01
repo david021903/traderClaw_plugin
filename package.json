@@ -7,13 +7,8 @@
   "exports": {
     ".": "./dist/index.js"
   },
-  "bin": {
-    "traderclaw": "bin/traderclaw.cjs"
-  },
   "files": [
     "dist/",
-    "bin/*.mjs",
-    "bin/*.cjs",
     "skills/",
     "config/",
     "lib/",
@@ -60,6 +55,7 @@
   "openclaw": {
     "extensions": [
       "./dist/index.js"
-    ]
+    ],
+    "hooks": []
   }
 }
