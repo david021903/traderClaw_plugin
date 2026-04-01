@@ -1,5 +1,7 @@
 import { build } from "esbuild";
-import { readdirSync } from "fs";
+import { readdirSync, rmSync } from "fs";
+
+rmSync("./dist", { recursive: true, force: true });
 
 const srcFiles = readdirSync("./src")
   .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
