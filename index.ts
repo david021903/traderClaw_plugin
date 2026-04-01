@@ -47,6 +47,8 @@ interface PluginConfig {
   externalUserId?: string;
   refreshToken?: string;
   walletPublicKey?: string;
+  /** Solana wallet private key (base58); use plugin config only — env vars are not read (OpenClaw install policy). */
+  walletPrivateKey?: string;
   /** Consumable one-time recovery secret (rotated server-side on each use). */
   recoverySecret?: string;
   apiTimeout?: number;
@@ -73,6 +75,7 @@ function parseConfig(raw: unknown): PluginConfig {
   const externalUserId = typeof obj.externalUserId === "string" ? obj.externalUserId : undefined;
   const refreshToken = typeof obj.refreshToken === "string" ? obj.refreshToken : undefined;
   const walletPublicKey = typeof obj.walletPublicKey === "string" ? obj.walletPublicKey : undefined;
+  const walletPrivateKey = typeof obj.walletPrivateKey === "string" ? obj.walletPrivateKey : undefined;
   const apiTimeout = typeof obj.apiTimeout === "number" ? obj.apiTimeout : 120000;
   const agentId = typeof obj.agentId === "string" ? obj.agentId : undefined;
   const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : undefined;
@@ -96,6 +99,7 @@ function parseConfig(raw: unknown): PluginConfig {
     externalUserId,
     refreshToken,
     walletPublicKey,
+    walletPrivateKey,
     recoverySecret,
     apiTimeout,
     agentId,
@@ -268,8 +272,8 @@ const solanaTraderPlugin = {
       refreshToken: effectiveRefreshToken,
       walletPublicKey: effectiveWalletPublicKey,
       walletPrivateKeyProvider: () => {
-        const runtimeKey = process.env.TRADERCLAW_WALLET_PRIVATE_KEY || "";
-        return runtimeKey.trim() || undefined;
+        const k = config.walletPrivateKey;
+        return typeof k === "string" && k.trim() ? k.trim() : undefined;
       },
       recoverySecretProvider: async () => {
         const fromDisk = readRecoverySecretFromDisk();
@@ -1476,12 +1480,18 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_gateway_credentials_set",
-      description: "Register or update your OpenClaw Gateway credentials with the orchestrator. This enables event-to-agent forwarding — when subscriptions include agentId, the orchestrator delivers each stream event to your Gateway via /v1/responses. Call this once during initial setup (Step 0). The gatewayBaseUrl is your self-hosted OpenClaw Gateway's public URL. The gatewayToken is the Bearer token for authenticating forwarded events.",
+      description: "Register or update your OpenClaw Gateway credentials with the orchestrator. This enables event-to-agent forwarding — when subscriptions include agentId, the orchestrator delivers each stream event to your Gateway via /v1/responses. Call this once during initial setup (Step 0). The gatewayBaseUrl is your self-hosted OpenClaw Gateway's public URL. The gatewayToken is the Bearer token for authenticating forwarded events. Optional forwardTelegramChatId stores your Telegram chat id on this credential row so agent replies are announced to that chat (same row as api_key + agentId). Omit forwardTelegramChatId to leave the stored value unchanged; pass null to clear.",
       parameters: Type.Object({
         gatewayBaseUrl: Type.String({ description: "Your OpenClaw Gateway's public HTTPS URL (e.g., 'https://gateway.example.com')" }),
         gatewayToken: Type.String({ description: "Bearer token for authenticating forwarded events to your Gateway" }),
         agentId: Type.Optional(Type.String({ description: "Agent ID to associate credentials with (default: 'main'). Omit to store as the default fallback." })),
         active: Type.Optional(Type.Boolean({ description: "Whether forwarding is active (default: true)" })),
+        forwardTelegramChatId: Type.Optional(
+          Type.Union([
+            Type.String({ description: "Telegram chat id (digits, optional leading -) for routing agent responses" }),
+            Type.Null({ description: "Clear stored Telegram chat id" }),
+          ]),
+        ),
       }),
       execute: wrapExecute("solana_gateway_credentials_set", async (_id, params) => {
         const body: Record<string, unknown> = {
@@ -1490,13 +1500,14 @@ const solanaTraderPlugin = {
         };
         if (params.agentId) body.agentId = params.agentId;
         if (params.active !== undefined) body.active = params.active;
+        if (params.forwardTelegramChatId !== undefined) body.forwardTelegramChatId = params.forwardTelegramChatId;
         return put("/api/agents/gateway-credentials", body);
       }),
     });
 
     api.registerTool({
       name: "solana_gateway_credentials_get",
-      description: "Get the currently registered Gateway credentials for event-to-agent forwarding. Returns the gatewayBaseUrl, agentId, active status, and masked token. Use to verify Gateway setup is correct.",
+      description: "Get the currently registered Gateway credentials for event-to-agent forwarding. Returns the gatewayBaseUrl, agentId, active status, forwardTelegramChatId (when set), and metadata. Use to verify Gateway setup is correct.",
       parameters: Type.Object({}),
       execute: wrapExecute("solana_gateway_credentials_get", async () =>
         get("/api/agents/gateway-credentials"),

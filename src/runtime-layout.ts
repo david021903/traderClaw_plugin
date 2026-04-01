@@ -6,10 +6,6 @@ export function resolveWorkspaceRoot(configOverride?: string): string {
   if (configOverride && configOverride.trim()) {
     return configOverride.trim().replace(/^~/, homedir());
   }
-  const envDir = process.env.OPENCLAW_WORKSPACE_DIR;
-  if (envDir && envDir.trim()) {
-    return envDir.trim().replace(/^~/, homedir());
-  }
   return join(homedir(), ".openclaw", "workspace");
 }
 
