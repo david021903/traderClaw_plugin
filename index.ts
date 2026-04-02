@@ -58,9 +58,11 @@ interface PluginConfig {
   gatewayToken?: string;
   /**
    * Telegram destination for agent replies: numeric chat id, or @username (resolved via Bot API getChat).
-   * Legacy `forwardTelegramChatId` in JSON is still read. Set TELEGRAM_BOT_TOKEN on the gateway to resolve usernames.
+   * Legacy `forwardTelegramChatId` in JSON is still read. Use `telegramBotToken` in plugin config to resolve @usernames.
    */
   forwardTelegramRecipient?: string;
+  /** Telegram bot token (@BotFather); plugin config only — required to resolve @username to chat id. */
+  telegramBotToken?: string;
   dataDir?: string;
   workspaceDir?: string;
   bootstrapDecisionCount?: number;
@@ -92,6 +94,7 @@ function parseConfig(raw: unknown): PluginConfig {
       : typeof obj.forwardTelegramChatId === "string"
         ? obj.forwardTelegramChatId
         : undefined;
+  const telegramBotToken = typeof obj.telegramBotToken === "string" ? obj.telegramBotToken : undefined;
   const dataDir = typeof obj.dataDir === "string" ? obj.dataDir : undefined;
   const workspaceDir = typeof obj.workspaceDir === "string" ? obj.workspaceDir : undefined;
   const bootstrapDecisionCount = typeof obj.bootstrapDecisionCount === "number" ? obj.bootstrapDecisionCount : 10;
@@ -118,6 +121,7 @@ function parseConfig(raw: unknown): PluginConfig {
     gatewayBaseUrl,
     gatewayToken,
     forwardTelegramRecipient,
+    telegramBotToken,
     dataDir,
     workspaceDir,
     bootstrapDecisionCount,
@@ -386,18 +390,13 @@ const solanaTraderPlugin = {
       });
     };
 
-    const getTelegramBotTokenFromEnv = () =>
-      String(process.env.TELEGRAM_BOT_TOKEN || process.env.OPENCLAW_TELEGRAM_BOT_TOKEN || "").trim();
+    const getTelegramBotToken = () => String(config.telegramBotToken || "").trim();
 
     const resolveForwardTelegramDestination = async (): Promise<string> => {
-      const raw =
-        String(config.forwardTelegramRecipient || "").trim() ||
-        String(process.env.TRADERCLAW_FORWARD_TELEGRAM_RECIPIENT || "").trim() ||
-        String(process.env.TRADERCLAW_FORWARD_TELEGRAM_CHAT_ID || "").trim() ||
-        String(process.env.OPENCLAW_TELEGRAM_CHAT_ID || "").trim();
+      const raw = String(config.forwardTelegramRecipient || "").trim();
       if (!raw) return "";
       if (looksLikeTelegramChatId(raw)) return raw;
-      const botToken = getTelegramBotTokenFromEnv();
+      const botToken = getTelegramBotToken();
       try {
         return await resolveTelegramRecipientToChatId({ botToken, raw });
       } catch (e) {
@@ -1515,7 +1514,7 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_gateway_credentials_set",
-      description: "Register or update your OpenClaw Gateway credentials with the orchestrator. This enables event-to-agent forwarding — when subscriptions include agentId, the orchestrator delivers each stream event to your Gateway via /v1/responses. Call this once during initial setup (Step 0). The gatewayBaseUrl is your self-hosted OpenClaw Gateway's public URL. The gatewayToken is the Bearer token for authenticating forwarded events. Use forwardTelegramRecipient with your @username or numeric chat id — the plugin resolves usernames via Telegram getChat when TELEGRAM_BOT_TOKEN is set on the gateway. Alternatively pass forwardTelegramChatId (numeric) or null to clear.",
+      description: "Register or update your OpenClaw Gateway credentials with the orchestrator. This enables event-to-agent forwarding — when subscriptions include agentId, the orchestrator delivers each stream event to your Gateway via /v1/responses. Call this once during initial setup (Step 0). The gatewayBaseUrl is your self-hosted OpenClaw Gateway's public URL. The gatewayToken is the Bearer token for authenticating forwarded events. Use forwardTelegramRecipient with your @username or numeric chat id — the plugin resolves usernames via Telegram getChat when plugin config telegramBotToken is set. Alternatively pass forwardTelegramChatId (numeric) or null to clear.",
       parameters: Type.Object({
         gatewayBaseUrl: Type.String({ description: "Your OpenClaw Gateway's public HTTPS URL (e.g., 'https://gateway.example.com')" }),
         gatewayToken: Type.String({ description: "Bearer token for authenticating forwarded events to your Gateway" }),
@@ -1524,7 +1523,7 @@ const solanaTraderPlugin = {
         forwardTelegramRecipient: Type.Optional(
           Type.String({
             description:
-              "Telegram @username or numeric chat id. Resolved to chat id via Bot API when not numeric (requires TELEGRAM_BOT_TOKEN on gateway).",
+              "Telegram @username or numeric chat id. Resolved to chat id via Bot API when not numeric (requires telegramBotToken in plugin config).",
           }),
         ),
         forwardTelegramChatId: Type.Optional(
@@ -1544,7 +1543,7 @@ const solanaTraderPlugin = {
         const recipientRaw = params.forwardTelegramRecipient;
         if (recipientRaw !== undefined && recipientRaw !== null && String(recipientRaw).trim()) {
           const id = await resolveTelegramRecipientToChatId({
-            botToken: getTelegramBotTokenFromEnv(),
+            botToken: getTelegramBotToken(),
             raw: String(recipientRaw),
           });
           body.forwardTelegramChatId = id;
