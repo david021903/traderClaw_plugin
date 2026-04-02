@@ -40,6 +40,8 @@ Every tool has a mandatory trigger — when the trigger condition is met, you MU
 | `solana_killswitch` | Toggle kill switch (enabled + mode) | When consecutive loss limit hit; when user requests |
 | `risk_management_get_default` | Read per-wallet default TP/SL/trailing used when buys omit risk | Before relying on implicit defaults; after user asks about protection |
 | `risk_management_set_default` | Save per-wallet default exit plan for future buys | When user or policy wants custom defaults instead of platform system default |
+| `trade_size_limit_get` | Read max **buy** size (SOL) from wallet `limits` (default 1.5) | Before every buy or when user asks about size limits |
+| `trade_size_limit_set` | Set max **buy** size (SOL) on wallet `limits` | When user asks to change the per-order cap |
 | `position_risk_management_update` | Adjust TP/SL/trailing **numbers** on an open position (same level count) | After entry when refining exits without removing levels |
 
 ### Scanning & Discovery (4)

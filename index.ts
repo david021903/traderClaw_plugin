@@ -1154,6 +1154,31 @@ const solanaTraderPlugin = {
     });
 
     api.registerTool({
+      name: "trade_size_limit_get",
+      description:
+        "Read the per-wallet maximum **buy** size in SOL enforced by the API (stored in `wallet.limits.maxTradeSizeSol`; platform default 1.5 SOL when unset). Always use this before sizing buys; never guess the limit.",
+      parameters: Type.Object({}),
+      execute: wrapExecute("trade_size_limit_get", async () =>
+        get(`/api/wallet/max-trade-size?walletId=${walletId}`),
+      ),
+    });
+
+    api.registerTool({
+      name: "trade_size_limit_set",
+      description:
+        "Set the per-wallet maximum buy size in SOL (persisted on the wallet `limits` JSON). Subject to a platform ceiling.",
+      parameters: Type.Object({
+        maxTradeSizeSol: Type.Number({ exclusiveMinimum: 0 }),
+      }),
+      execute: wrapExecute("trade_size_limit_set", async (_id, params) =>
+        put("/api/wallet/max-trade-size", {
+          walletId,
+          maxTradeSizeSol: params.maxTradeSizeSol,
+        }),
+      ),
+    });
+
+    api.registerTool({
       name: "risk_management_set_default",
       description:
         "Save per-wallet default exit parameters (`tpExits`, `slExits`, `trailingStop.levels`) applied on buys that omit risk fields. Same shape as trade execute exit payloads.",

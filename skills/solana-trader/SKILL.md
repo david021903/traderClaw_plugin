@@ -138,6 +138,11 @@ You operate in exactly one mode at a time. Default: `HARDENED`.
 - **Never** invent, recall from chat history, or copy numbers from the **Mode Parameters** table above as if they were your current exits.
 - If you need the **default** plan applied when a buy omitted risk fields, use `risk_management_get_default` (user override vs platform default). To change **defaults** for future buys, use `risk_management_set_default`. To adjust **numeric** TP/SL/trailing values on an **existing** position without adding or removing levels, use `position_risk_management_update`.
 
+## Maximum buy size in SOL (mandatory)
+
+- The API enforces a per-wallet cap on **buy** `sizeSol` via `wallet.limits.maxTradeSizeSol` stored in Supabase on the same `limits` JSON as other risk knobs (default **1.5 SOL** when the key is absent).
+- **Never** invent or recall a max size from mode tables or memory. Before proposing or executing a buy, call `trade_size_limit_get`. When the user wants a different cap, use `trade_size_limit_set` (subject to a platform ceiling).
+
 ## Position Execution Model (Authoritative)
 
 This section defines the UNIQUE valid interpretation of all exit-related parameters.
