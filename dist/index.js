@@ -2,6 +2,10 @@ import {
   SessionManager
 } from "./chunk-PZCY6BQK.js";
 import {
+  looksLikeTelegramChatId,
+  resolveTelegramRecipientToChatId
+} from "./chunk-5RCGTPR3.js";
+import {
   normalizeToolError,
   normalizeToolSuccess,
   renderToolEnvelope
@@ -775,6 +779,7 @@ function parseConfig(raw) {
   const agentId = typeof obj.agentId === "string" ? obj.agentId : void 0;
   const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : void 0;
   const gatewayToken = typeof obj.gatewayToken === "string" ? obj.gatewayToken : void 0;
+  const forwardTelegramRecipient = typeof obj.forwardTelegramRecipient === "string" ? obj.forwardTelegramRecipient : typeof obj.forwardTelegramChatId === "string" ? obj.forwardTelegramChatId : void 0;
   const dataDir = typeof obj.dataDir === "string" ? obj.dataDir : void 0;
   const workspaceDir = typeof obj.workspaceDir === "string" ? obj.workspaceDir : void 0;
   const bootstrapDecisionCount = typeof obj.bootstrapDecisionCount === "number" ? obj.bootstrapDecisionCount : 10;
@@ -797,6 +802,7 @@ function parseConfig(raw) {
     agentId,
     gatewayBaseUrl,
     gatewayToken,
+    forwardTelegramRecipient,
     dataDir,
     workspaceDir,
     bootstrapDecisionCount,
@@ -1028,6 +1034,21 @@ var solanaTraderPlugin = {
         accessToken: token,
         onUnauthorized
       });
+    };
+    const getTelegramBotTokenFromEnv = () => String(process.env.TELEGRAM_BOT_TOKEN || process.env.OPENCLAW_TELEGRAM_BOT_TOKEN || "").trim();
+    const resolveForwardTelegramDestination = async () => {
+      const raw = String(config.forwardTelegramRecipient || "").trim() || String(process.env.TRADERCLAW_FORWARD_TELEGRAM_RECIPIENT || "").trim() || String(process.env.TRADERCLAW_FORWARD_TELEGRAM_CHAT_ID || "").trim() || String(process.env.OPENCLAW_TELEGRAM_CHAT_ID || "").trim();
+      if (!raw) return "";
+      if (looksLikeTelegramChatId(raw)) return raw;
+      const botToken = getTelegramBotTokenFromEnv();
+      try {
+        return await resolveTelegramRecipientToChatId({ botToken, raw });
+      } catch (e) {
+        api.logger.warn(
+          `[solana-trader] Telegram recipient "${raw}" could not be resolved: ${e instanceof Error ? e.message : String(e)}`
+        );
+        return "";
+      }
     };
     const json = (data) => ({
       content: [{ type: "text", text: JSON.stringify(data, null, 2) }]
@@ -2059,15 +2080,20 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_gateway_credentials_set",
-      description: "Register or update your OpenClaw Gateway credentials with the orchestrator. This enables event-to-agent forwarding \u2014 when subscriptions include agentId, the orchestrator delivers each stream event to your Gateway via /v1/responses. Call this once during initial setup (Step 0). The gatewayBaseUrl is your self-hosted OpenClaw Gateway's public URL. The gatewayToken is the Bearer token for authenticating forwarded events. Optional forwardTelegramChatId stores your Telegram chat id on this credential row so agent replies are announced to that chat (same row as api_key + agentId). Omit forwardTelegramChatId to leave the stored value unchanged; pass null to clear.",
+      description: "Register or update your OpenClaw Gateway credentials with the orchestrator. This enables event-to-agent forwarding \u2014 when subscriptions include agentId, the orchestrator delivers each stream event to your Gateway via /v1/responses. Call this once during initial setup (Step 0). The gatewayBaseUrl is your self-hosted OpenClaw Gateway's public URL. The gatewayToken is the Bearer token for authenticating forwarded events. Use forwardTelegramRecipient with your @username or numeric chat id \u2014 the plugin resolves usernames via Telegram getChat when TELEGRAM_BOT_TOKEN is set on the gateway. Alternatively pass forwardTelegramChatId (numeric) or null to clear.",
       parameters: Type.Object({
         gatewayBaseUrl: Type.String({ description: "Your OpenClaw Gateway's public HTTPS URL (e.g., 'https://gateway.example.com')" }),
         gatewayToken: Type.String({ description: "Bearer token for authenticating forwarded events to your Gateway" }),
         agentId: Type.Optional(Type.String({ description: "Agent ID to associate credentials with (default: 'main'). Omit to store as the default fallback." })),
         active: Type.Optional(Type.Boolean({ description: "Whether forwarding is active (default: true)" })),
+        forwardTelegramRecipient: Type.Optional(
+          Type.String({
+            description: "Telegram @username or numeric chat id. Resolved to chat id via Bot API when not numeric (requires TELEGRAM_BOT_TOKEN on gateway)."
+          })
+        ),
         forwardTelegramChatId: Type.Optional(
           Type.Union([
-            Type.String({ description: "Telegram chat id (digits, optional leading -) for routing agent responses" }),
+            Type.String({ description: "Numeric Telegram chat id (digits, optional leading -)" }),
             Type.Null({ description: "Clear stored Telegram chat id" })
           ])
         )
@@ -2079,7 +2105,16 @@ var solanaTraderPlugin = {
         };
         if (params.agentId) body.agentId = params.agentId;
         if (params.active !== void 0) body.active = params.active;
-        if (params.forwardTelegramChatId !== void 0) body.forwardTelegramChatId = params.forwardTelegramChatId;
+        const recipientRaw = params.forwardTelegramRecipient;
+        if (recipientRaw !== void 0 && recipientRaw !== null && String(recipientRaw).trim()) {
+          const id = await resolveTelegramRecipientToChatId({
+            botToken: getTelegramBotTokenFromEnv(),
+            raw: String(recipientRaw)
+          });
+          body.forwardTelegramChatId = id;
+        } else if (params.forwardTelegramChatId !== void 0) {
+          body.forwardTelegramChatId = params.forwardTelegramChatId;
+        }
         return put("/api/agents/gateway-credentials", body);
       })
     });
@@ -2160,26 +2195,45 @@ var solanaTraderPlugin = {
         }
         let gatewayStepOk = false;
         try {
+          const gbu = String(config.gatewayBaseUrl || "").trim();
+          const gt = String(config.gatewayToken || "").trim();
+          const forwardChatId = await resolveForwardTelegramDestination();
           const creds = await get("/api/agents/gateway-credentials");
           let activeCredential = getActiveCredential(creds);
           if (!activeCredential && autoFixGateway) {
-            const gbu = String(config.gatewayBaseUrl || "").trim();
-            const gt = String(config.gatewayToken || "").trim();
             if (gbu && gt) {
               const body = { gatewayBaseUrl: gbu, gatewayToken: gt, active: true };
               if (config.agentId) body.agentId = config.agentId;
+              if (forwardChatId) body.forwardTelegramChatId = forwardChatId;
               await put("/api/agents/gateway-credentials", body);
             }
           }
-          const refreshed = await get("/api/agents/gateway-credentials");
+          let refreshed = await get("/api/agents/gateway-credentials");
           activeCredential = getActiveCredential(refreshed);
+          if (activeCredential && autoFixGateway && gbu && gt && forwardChatId && !activeCredential.forwardTelegramChatId) {
+            const syncBody = {
+              gatewayBaseUrl: gbu,
+              gatewayToken: gt,
+              active: true,
+              forwardTelegramChatId: forwardChatId
+            };
+            if (config.agentId) syncBody.agentId = config.agentId;
+            await put("/api/agents/gateway-credentials", syncBody);
+            refreshed = await get("/api/agents/gateway-credentials");
+            activeCredential = getActiveCredential(refreshed);
+          }
           gatewayStepOk = Boolean(activeCredential);
           if (!gatewayStepOk) throw new Error("Gateway credentials are missing or inactive");
           pushStep({
             step: "solana_gateway_credentials_get",
             ok: true,
             ts: Date.now(),
-            details: { active: true, agentId: String(activeCredential?.agentId || config.agentId || "main"), gatewayBaseUrl: String(activeCredential?.gatewayBaseUrl || "") }
+            details: {
+              active: true,
+              agentId: String(activeCredential?.agentId || config.agentId || "main"),
+              gatewayBaseUrl: String(activeCredential?.gatewayBaseUrl || ""),
+              forwardTelegramChatId: activeCredential?.forwardTelegramChatId != null ? String(activeCredential.forwardTelegramChatId) : ""
+            }
           });
         } catch (err) {
           pushStep({
@@ -3021,6 +3075,306 @@ ${String(params.summary)}
       })
     });
     api.registerTool({
+      name: "solana_memory_trim",
+      description: "Smart memory compaction \u2014 trims local memory footprint while preserving critical data. Reports bytesFreed/bytesFreedMB. Cleans: daily logs older than retention window, stale state keys, old decision log entries (preserving trade entries/exits for 7 days), old bulletin entries, and stale context snapshots (keeps only newest). NEVER touches: identity/config state keys (tier, walletId, mode, strategyVersion, featureWeights, permanentLearnings, namedPatterns, discoveryFilters, watchlist, consecutiveLosses, totalTrades, winCount, lossCount, peakCapital), skill files, or server-side memory. Designed to run as a daily cron job.",
+      parameters: Type.Object({
+        retentionDays: Type.Optional(Type.Number({ description: "Number of days of data to retain. Default 2." })),
+        dryRun: Type.Optional(Type.Boolean({ description: "If true, report what would be trimmed without actually deleting. Default false." }))
+      }),
+      execute: wrapExecute("solana_memory_trim", async (_id, params) => {
+        const rawDays = typeof params.retentionDays === "number" ? params.retentionDays : 2;
+        const retentionDays = Math.max(1, Math.floor(rawDays));
+        const dryRun = Boolean(params.dryRun);
+        const now = /* @__PURE__ */ new Date();
+        const cutoffMs = now.getTime() - retentionDays * 24 * 60 * 60 * 1e3;
+        const tradeRetentionMs = now.getTime() - 7 * 24 * 60 * 60 * 1e3;
+        const summary = { retentionDays, dryRun, trimmedAt: now.toISOString() };
+        let bytesFreed = 0;
+        let dailyLogsDeleted = 0;
+        try {
+          if (fs.existsSync(memoryDir)) {
+            const files = fs.readdirSync(memoryDir).filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f));
+            for (const file of files) {
+              const dateStr = file.replace(".md", "");
+              if (new Date(dateStr).getTime() < cutoffMs) {
+                const filePath = path.join(memoryDir, file);
+                try {
+                  bytesFreed += fs.statSync(filePath).size;
+                } catch {
+                }
+                if (!dryRun) {
+                  try {
+                    fs.unlinkSync(filePath);
+                  } catch {
+                  }
+                }
+                dailyLogsDeleted++;
+              }
+            }
+          }
+        } catch {
+        }
+        summary.dailyLogsDeleted = dailyLogsDeleted;
+        const protectedStateKeys = /* @__PURE__ */ new Set([
+          "tier",
+          "walletId",
+          "mode",
+          "strategyVersion",
+          "regime",
+          "maxPositions",
+          "maxPositionSizeSol",
+          "defenseMode",
+          "killSwitchActive",
+          "permanentLearnings",
+          "regimeCanary",
+          "featureWeights",
+          "killSwitchReason",
+          "namedPatterns",
+          "discoveryFilters",
+          "watchlist",
+          "consecutiveLosses",
+          "totalTrades",
+          "winCount",
+          "lossCount",
+          "peakCapital"
+        ]);
+        let stateKeysPruned = 0;
+        let watchlistTrimmed = 0;
+        try {
+          const stateFiles = fs.existsSync(stateDir) ? fs.readdirSync(stateDir).filter((f) => f.endsWith(".json") && f !== "context-snapshot.json" && f !== "patterns.json") : [];
+          for (const sf of stateFiles) {
+            const statePath = path.join(stateDir, sf);
+            const raw = readJsonFile(statePath);
+            if (!raw || !raw.state || typeof raw.state !== "object") continue;
+            const state = raw.state;
+            const keysToRemove = [];
+            for (const key of Object.keys(state)) {
+              if (protectedStateKeys.has(key)) continue;
+              const val = state[key];
+              if (val === null || val === void 0) {
+                keysToRemove.push(key);
+                continue;
+              }
+              if (typeof val === "object" && !Array.isArray(val) && Object.keys(val).length === 0) {
+                keysToRemove.push(key);
+                continue;
+              }
+              if (Array.isArray(val) && val.length === 0) {
+                keysToRemove.push(key);
+                continue;
+              }
+              if (typeof val === "object" && val !== null) {
+                const obj = val;
+                const tsFields = ["ts", "timestamp", "updatedAt", "detectedAt", "lastUpdated", "lastRun"];
+                let foundStaleTs = false;
+                for (const tf of tsFields) {
+                  if (typeof obj[tf] === "string") {
+                    try {
+                      if (new Date(obj[tf]).getTime() < cutoffMs) {
+                        foundStaleTs = true;
+                      }
+                    } catch {
+                    }
+                    break;
+                  }
+                }
+                if (foundStaleTs) {
+                  keysToRemove.push(key);
+                  continue;
+                }
+              }
+              if (typeof val === "string") {
+                try {
+                  const parsed = new Date(val);
+                  if (!isNaN(parsed.getTime()) && /^\d{4}-\d{2}-\d{2}/.test(val) && parsed.getTime() < cutoffMs) {
+                    keysToRemove.push(key);
+                    continue;
+                  }
+                } catch {
+                }
+              }
+            }
+            let fileWatchlistTrimmed = 0;
+            if (state.watchlist && Array.isArray(state.watchlist) && state.watchlist.length > 0) {
+              const wl = state.watchlist;
+              const filtered = wl.filter((item) => {
+                if (typeof item === "object" && item !== null) {
+                  const obj = item;
+                  const ts = obj.addedAt || obj.ts || obj.timestamp;
+                  if (typeof ts === "string") {
+                    try {
+                      return new Date(ts).getTime() >= cutoffMs;
+                    } catch {
+                    }
+                  }
+                }
+                return true;
+              });
+              const capped = filtered.length > 10 ? filtered.slice(-10) : filtered;
+              if (capped.length < wl.length) {
+                fileWatchlistTrimmed = wl.length - capped.length;
+                if (!dryRun) state.watchlist = capped;
+              }
+            }
+            watchlistTrimmed += fileWatchlistTrimmed;
+            if (keysToRemove.length > 0 || fileWatchlistTrimmed > 0) {
+              stateKeysPruned += keysToRemove.length;
+              const sizeBefore = (() => {
+                try {
+                  return fs.statSync(statePath).size;
+                } catch {
+                  return 0;
+                }
+              })();
+              if (!dryRun) {
+                for (const k of keysToRemove) delete state[k];
+                raw.state = state;
+                raw.updatedAt = now.toISOString();
+                writeJsonFile(statePath, raw);
+                const aid = sf.replace(".json", "");
+                writeMemoryMd(aid, state);
+                const sizeAfter = (() => {
+                  try {
+                    return fs.statSync(statePath).size;
+                  } catch {
+                    return 0;
+                  }
+                })();
+                bytesFreed += Math.max(0, sizeBefore - sizeAfter);
+              } else {
+                bytesFreed += sizeBefore;
+              }
+            }
+          }
+        } catch {
+        }
+        summary.stateKeysPruned = stateKeysPruned;
+        summary.watchlistTrimmed = watchlistTrimmed;
+        const protectedDecisionTypes = /* @__PURE__ */ new Set(["trade_entry", "trade_exit", "position_update", "killswitch"]);
+        let decisionEntriesTrimmed = 0;
+        try {
+          if (fs.existsSync(logsDir)) {
+            const agentDirs = fs.readdirSync(logsDir).filter((d) => {
+              try {
+                return fs.statSync(path.join(logsDir, d)).isDirectory() && d !== "shared";
+              } catch {
+                return false;
+              }
+            });
+            for (const ad of agentDirs) {
+              const decLogPath = path.join(logsDir, ad, "decisions.jsonl");
+              if (!fs.existsSync(decLogPath)) continue;
+              const entries = readJsonlFile(decLogPath);
+              const kept = entries.filter((e) => {
+                const entryTs = new Date(e.ts).getTime();
+                if (protectedDecisionTypes.has(e.type || "")) return entryTs >= tradeRetentionMs;
+                return entryTs >= cutoffMs;
+              });
+              const removed = entries.length - kept.length;
+              if (removed > 0) {
+                decisionEntriesTrimmed += removed;
+                const sizeBefore = (() => {
+                  try {
+                    return fs.statSync(decLogPath).size;
+                  } catch {
+                    return 0;
+                  }
+                })();
+                if (!dryRun) {
+                  fs.writeFileSync(decLogPath, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length > 0 ? "\n" : ""), "utf-8");
+                  const sizeAfter = (() => {
+                    try {
+                      return fs.statSync(decLogPath).size;
+                    } catch {
+                      return 0;
+                    }
+                  })();
+                  bytesFreed += Math.max(0, sizeBefore - sizeAfter);
+                } else {
+                  bytesFreed += sizeBefore;
+                }
+              }
+            }
+          }
+        } catch {
+        }
+        summary.decisionEntriesTrimmed = decisionEntriesTrimmed;
+        let bulletinEntriesTrimmed = 0;
+        try {
+          const bulletinPath = path.join(sharedLogsDir, "team-bulletin.jsonl");
+          if (fs.existsSync(bulletinPath)) {
+            const entries = readJsonlFile(bulletinPath);
+            let kept = entries.filter((e) => new Date(e.ts).getTime() >= cutoffMs);
+            if (kept.length < 20 && entries.length >= 20) kept = entries.slice(-20);
+            else if (kept.length < 20) kept = entries;
+            const removed = entries.length - kept.length;
+            if (removed > 0) {
+              bulletinEntriesTrimmed = removed;
+              const sizeBefore = (() => {
+                try {
+                  return fs.statSync(bulletinPath).size;
+                } catch {
+                  return 0;
+                }
+              })();
+              if (!dryRun) {
+                fs.writeFileSync(bulletinPath, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length > 0 ? "\n" : ""), "utf-8");
+                const sizeAfter = (() => {
+                  try {
+                    return fs.statSync(bulletinPath).size;
+                  } catch {
+                    return 0;
+                  }
+                })();
+                bytesFreed += Math.max(0, sizeBefore - sizeAfter);
+              } else {
+                bytesFreed += sizeBefore;
+              }
+            }
+          }
+        } catch {
+        }
+        summary.bulletinEntriesTrimmed = bulletinEntriesTrimmed;
+        let snapshotsDeleted = 0;
+        try {
+          if (fs.existsSync(stateDir)) {
+            const snapshotFiles = fs.readdirSync(stateDir).filter((f) => f.startsWith("context-snapshot") && f.endsWith(".json"));
+            if (snapshotFiles.length > 1) {
+              const sorted = snapshotFiles.map((f) => ({
+                name: f,
+                mtime: (() => {
+                  try {
+                    return fs.statSync(path.join(stateDir, f)).mtimeMs;
+                  } catch {
+                    return 0;
+                  }
+                })()
+              })).sort((a, b) => b.mtime - a.mtime);
+              for (let i = 1; i < sorted.length; i++) {
+                const fp = path.join(stateDir, sorted[i].name);
+                try {
+                  bytesFreed += fs.statSync(fp).size;
+                } catch {
+                }
+                if (!dryRun) {
+                  try {
+                    fs.unlinkSync(fp);
+                  } catch {
+                  }
+                }
+                snapshotsDeleted++;
+              }
+            }
+          }
+        } catch {
+        }
+        summary.snapshotsDeleted = snapshotsDeleted;
+        summary.bytesFreed = bytesFreed;
+        summary.bytesFreedMB = Math.round(bytesFreed / 1024 / 1024 * 100) / 100;
+        return summary;
+      })
+    });
+    api.registerTool({
       name: "solana_candidate_write",
       description: "Upsert a candidate record in the local intelligence lab. Candidates are token opportunities being tracked for scoring, outcome labeling, and strategy learning. Features map is used for model scoring.",
       parameters: Type.Object({
@@ -3501,7 +3855,7 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
     const xToolCount = config.xConfig?.ok ? xWriteEnabled ? 5 : 3 : 0;
     const webFetchCount = 1;
     const intelligenceToolCount = 17;
-    const baseToolCount = 76;
+    const baseToolCount = 77;
     const totalRegistered = baseToolCount + intelligenceToolCount + webFetchCount;
     const totalToolCount = totalRegistered + xToolCount;
     api.logger.info(
