@@ -5,10 +5,16 @@ import { readFileSync, writeFileSync, mkdirSync, appendFileSync, existsSync } fr
 import { join } from "path";
 import { homedir } from "os";
 import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
-import { execSync } from "child_process";
+import { execFile, execSync } from "child_process";
+import { promisify } from "util";
 import { createServer } from "http";
-import { sortModelsByPreference } from "./llm-model-preference.mjs";
+import { sortModelsByPreference, MAX_MODELS_PER_PROVIDER_SORT } from "./llm-model-preference.mjs";
 import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
+
+const execFileAsync = promisify(execFile);
+
+/** Parallel per-provider `openclaw models list` — wall time ~max(single), not sum of all providers. */
+const OPENCLAW_MODELS_PER_PROVIDER_TIMEOUT_MS = 16_000;
 
 const PLUGIN_ROOT = resolvePluginPackageRoot(import.meta.url);
 const PACKAGE_JSON = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf-8"));
@@ -1766,7 +1772,7 @@ function parseJsonBody(req) {
   });
 }
 
-function loadWizardLlmCatalog() {
+async function loadWizardLlmCatalogAsync() {
   const supportedProviders = new Set([
     "anthropic",
     "openai",
@@ -1830,34 +1836,54 @@ function loadWizardLlmCatalog() {
     return { ...fallback, warning: "openclaw_not_found" };
   }
 
+  const providerIds = [...supportedProviders].sort((a, b) => a.localeCompare(b));
+
+  async function fetchModelsForProvider(provider) {
+    try {
+      const { stdout } = await execFileAsync(
+        "openclaw",
+        ["models", "list", "--all", "--provider", provider, "--json"],
+        {
+          encoding: "utf-8",
+          maxBuffer: 25 * 1024 * 1024,
+          timeout: OPENCLAW_MODELS_PER_PROVIDER_TIMEOUT_MS,
+          env: NO_COLOR_ENV,
+        },
+      );
+      return { provider, stdout };
+    } catch (err) {
+      return { provider, error: err };
+    }
+  }
+
   try {
-    const raw = execSync("openclaw models list --all --json", {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 50 * 1024 * 1024,
-      timeout: 30_000,
-      env: NO_COLOR_ENV,
-    });
-    const parsed = extractJson(raw);
-    if (!parsed) throw new Error(`Could not extract JSON from openclaw models list output (first 200 chars): ${stripAnsi(raw).slice(0, 200)}`);
-    const models = Array.isArray(parsed?.models) ? parsed.models : [];
+    const t0 = Date.now();
+    const batches = await Promise.all(providerIds.map((p) => fetchModelsForProvider(p)));
     const providerMap = new Map();
-    for (const entry of models) {
-      if (!entry || typeof entry.key !== "string") continue;
-      const modelId = String(entry.key);
-      const slash = modelId.indexOf("/");
-      if (slash <= 0 || slash === modelId.length - 1) continue;
-      const provider = modelId.slice(0, slash);
-      const existing = providerMap.get(provider) || [];
-      existing.push({
-        id: modelId,
-        name: typeof entry.name === "string" && entry.name.trim() ? entry.name : modelId,
-      });
-      providerMap.set(provider, existing);
+
+    for (const batch of batches) {
+      if (batch.error || !batch.stdout) continue;
+      const parsed = extractJson(batch.stdout);
+      if (!parsed) continue;
+      const models = Array.isArray(parsed?.models) ? parsed.models : [];
+      const want = batch.provider;
+      for (const entry of models) {
+        if (!entry || typeof entry.key !== "string") continue;
+        const modelId = String(entry.key);
+        const slash = modelId.indexOf("/");
+        if (slash <= 0 || slash === modelId.length - 1) continue;
+        const provider = modelId.slice(0, slash);
+        if (provider !== want) continue;
+        const existing = providerMap.get(provider) || [];
+        existing.push({
+          id: modelId,
+          name: typeof entry.name === "string" && entry.name.trim() ? entry.name : modelId,
+        });
+        providerMap.set(provider, existing);
+      }
     }
 
-    const providers = [...providerMap.keys()]
-      .sort((a, b) => a.localeCompare(b))
+    const providers = providerIds
       .map((id) => {
         const rawModels = providerMap.get(id) || [];
         const sortedIds = sortModelsByPreference(
@@ -1865,7 +1891,8 @@ function loadWizardLlmCatalog() {
           rawModels.map((m) => m.id),
         );
         const byId = new Map(rawModels.map((m) => [m.id, m]));
-        const models = sortedIds.map((mid) => byId.get(mid)).filter(Boolean);
+        const limitedIds = sortedIds.slice(0, MAX_MODELS_PER_PROVIDER_SORT);
+        const models = limitedIds.map((mid) => byId.get(mid)).filter(Boolean);
         return { id, models };
       })
       .filter((entry) => supportedProviders.has(entry.id))
@@ -1875,10 +1902,12 @@ function loadWizardLlmCatalog() {
       return { ...fallback, warning: "openclaw_model_catalog_empty" };
     }
 
+    const elapsedMs = Date.now() - t0;
     return {
       source: "openclaw",
       providers,
       generatedAt: new Date().toISOString(),
+      catalogFetchMs: elapsedMs,
     };
   } catch (err) {
     const detail = err?.message || String(err);
@@ -2629,7 +2658,15 @@ async function cmdInstall(args) {
     }
 
     if (req.method === "GET" && req.url === "/api/llm/options") {
-      respondJson(200, loadWizardLlmCatalog());
+      try {
+        const payload = await loadWizardLlmCatalogAsync();
+        respondJson(200, payload);
+      } catch (err) {
+        respondJson(500, {
+          source: "error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
       return;
     }
 

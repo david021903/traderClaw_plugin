@@ -1,4 +1,4 @@
-import { execSync, spawn } from "child_process";
+import { execFileSync, execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
@@ -1214,8 +1214,21 @@ function persistXProfileIdentities(configPath, modeConfig, identities) {
 }
 
 function listProviderModels(provider) {
-  const cmd = `openclaw models list --all --provider ${shellQuote(provider)} --json`;
-  const raw = getCommandOutput(cmd);
+  let raw;
+  try {
+    raw = execFileSync(
+      "openclaw",
+      ["models", "list", "--all", "--provider", provider, "--json"],
+      {
+        encoding: "utf-8",
+        maxBuffer: 25 * 1024 * 1024,
+        timeout: 20_000,
+        env: NO_COLOR_ENV,
+      },
+    ).trim();
+  } catch {
+    return [];
+  }
   if (!raw) return [];
   const parsed = extractJson(raw);
   if (!parsed) return [];
