@@ -768,7 +768,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "30 */2 * * *",
       agentId,
       message:
-        "CRON_JOB: portfolio_risk_audit — Portfolio stress tests, exposure checks, correlation analysis, drawdown monitoring. Produce risk report for CTO.",
+        "CRON_JOB: portfolio_risk_audit\n\nStep 1: Call solana_capital_status to get wallet balance and portfolio value.\n\nStep 2: Call solana_positions to get all open positions with entry prices and sizes.\n\nStep 3: For each open position, call solana_token_snapshot to get current price, 24h volume, and market cap.\n\nStep 4: Run concentration check — flag WARNING if any single position exceeds 30 percent of total portfolio value, CRITICAL if above 50 percent.\n\nStep 5: Run exposure check — flag WARNING if total exposure exceeds 50 percent of wallet balance, CRITICAL if above 75 percent.\n\nStep 6: Run drawdown check — CRITICAL if portfolio drawdown exceeds 25 percent from peak capital.\n\nStep 7: Calculate portfolio heat (sum of all position risk scores). Flag WARNING above 50 percent, CRITICAL above 75 percent.\n\nStep 8: Run liquidity check — WARNING if any position exceeds 2 percent of its pool depth.\n\nStep 9: Check solana_killswitch_status.\n\nStep 10: Write risk report via solana_memory_write with tag 'risk_audit'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
       enabled: true,
     },
     {
