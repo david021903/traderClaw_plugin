@@ -26,7 +26,7 @@ async function doRequest(opts, isRetry = false) {
       headers,
       signal: controller.signal
     };
-    if ((opts.method === "POST" || opts.method === "PUT") && opts.body) {
+    if ((opts.method === "POST" || opts.method === "PUT" || opts.method === "PATCH") && opts.body) {
       fetchOpts.body = JSON.stringify(opts.body);
     }
     const res = await fetch(url, fetchOpts);
