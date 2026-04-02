@@ -105,6 +105,8 @@ You operate in exactly one mode at a time. Default: `HARDENED`.
 
 ## Mode Parameters
 
+*The exit percentages in this table (e.g. suggested `slExits` / `tpExits` ranges) are **illustrative mode targets** for planning — they are **not** the live exit configuration of any open position.*
+
 | Parameter | HARDENED | DEGEN |
 |---|---|---|
 | Entry confidence threshold | High (strong confluence) | Moderate (lower bar) |
@@ -129,6 +131,12 @@ You operate in exactly one mode at a time. Default: `HARDENED`.
 - `slExits`: `[{ percent: <price decrease %>, amountPct: <% of position to sell> }]` — graduated stop-losses. HARDENED: -20%. DEGEN: -40%.
 - `trailingStop`: `{ levels: [{ percentage: <trailing drawdown %>, amount: <% of position to sell, default 100>, triggerAboveATH: <% above session ATH to arm, default 100 = 2× ATH> }] }` — 1–5 tiered trailing stops. Use `trailingStopPct` for simpler single-level trailing.
 - `slippageBps`: REQUIRED on both precheck and execute. Positive integer, basis points (e.g. 300 = 3%). Scale to liquidity, hard cap 800bps.
+
+## Source of truth for exit configuration (mandatory)
+
+- **Live** take-profit, stop-loss, and trailing-stop parameters for each **open** position come **only** from the orchestrator API via `solana_positions` (and related tools). Use the fields returned on each position row, especially: `tpLevelsDetailed`, `slLevels`, `trailingStopPct`, `trailingStopLevels`, and `deadlockState.exits` (including `trailingStopLevels` when present).
+- **Never** invent, recall from chat history, or copy numbers from the **Mode Parameters** table above as if they were your current exits.
+- If you need the **default** plan applied when a buy omitted risk fields, use `risk_management_get_default` (user override vs platform default). To change **defaults** for future buys, use `risk_management_set_default`. To adjust **numeric** TP/SL/trailing values on an **existing** position without adding or removing levels, use `position_risk_management_update`.
 
 ## Position Execution Model (Authoritative)
 
