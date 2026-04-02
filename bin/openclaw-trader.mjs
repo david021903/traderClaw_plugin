@@ -1856,6 +1856,51 @@ async function loadWizardLlmCatalogAsync() {
     }
   }
 
+  function buildProvidersFromMap(providerMap) {
+    return providerIds
+      .map((id) => {
+        const rawModels = providerMap.get(id) || [];
+        const sortedIds = sortModelsByPreference(
+          id,
+          rawModels.map((m) => m.id),
+        );
+        const byId = new Map(rawModels.map((m) => [m.id, m]));
+        const limitedIds = sortedIds.slice(0, MAX_MODELS_PER_PROVIDER_SORT);
+        const models = limitedIds.map((mid) => byId.get(mid)).filter(Boolean);
+        return { id, models };
+      })
+      .filter((entry) => supportedProviders.has(entry.id))
+      .filter((entry) => entry.models.length > 0);
+  }
+
+  /** When `openclaw models list --all --json` returns models; used if per-provider calls yield nothing. */
+  function mergeFlatCatalogIntoMap(providerMap) {
+    const raw = execSync("openclaw models list --all --json", {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: 45_000,
+      env: NO_COLOR_ENV,
+    });
+    const parsed = extractJson(raw);
+    if (!parsed) return;
+    const models = Array.isArray(parsed?.models) ? parsed.models : [];
+    for (const entry of models) {
+      if (!entry || typeof entry.key !== "string") continue;
+      const modelId = String(entry.key);
+      const slash = modelId.indexOf("/");
+      if (slash <= 0 || slash === modelId.length - 1) continue;
+      const provider = modelId.slice(0, slash);
+      if (!supportedProviders.has(provider)) continue;
+      const existing = providerMap.get(provider) || [];
+      existing.push({
+        id: modelId,
+        name: typeof entry.name === "string" && entry.name.trim() ? entry.name : modelId,
+      });
+      providerMap.set(provider, existing);
+    }
+  }
+
   try {
     const t0 = Date.now();
     const batches = await Promise.all(providerIds.map((p) => fetchModelsForProvider(p)));
@@ -1883,23 +1928,28 @@ async function loadWizardLlmCatalogAsync() {
       }
     }
 
-    const providers = providerIds
-      .map((id) => {
-        const rawModels = providerMap.get(id) || [];
-        const sortedIds = sortModelsByPreference(
-          id,
-          rawModels.map((m) => m.id),
-        );
-        const byId = new Map(rawModels.map((m) => [m.id, m]));
-        const limitedIds = sortedIds.slice(0, MAX_MODELS_PER_PROVIDER_SORT);
-        const models = limitedIds.map((mid) => byId.get(mid)).filter(Boolean);
-        return { id, models };
-      })
-      .filter((entry) => supportedProviders.has(entry.id))
-      .filter((entry) => entry.models.length > 0);
+    let providers = buildProvidersFromMap(providerMap);
+    let catalogStrategy = "parallel";
 
     if (providers.length === 0) {
-      return { ...fallback, warning: "openclaw_model_catalog_empty" };
+      catalogStrategy = "legacy_fallback";
+      try {
+        mergeFlatCatalogIntoMap(providerMap);
+        providers = buildProvidersFromMap(providerMap);
+      } catch (legacyErr) {
+        console.error(
+          `[traderclaw] loadWizardLlmCatalog legacy fallback failed: ${legacyErr instanceof Error ? legacyErr.message : String(legacyErr)}`,
+        );
+      }
+    }
+
+    if (providers.length === 0) {
+      const failedParallel = batches.filter((b) => b.error).length;
+      const hint =
+        failedParallel > 0
+          ? ` (${failedParallel}/${batches.length} per-provider openclaw calls failed — check OpenClaw version supports: openclaw models list --all --provider <id> --json)`
+          : "";
+      return { ...fallback, warning: `openclaw_model_catalog_empty${hint}` };
     }
 
     const elapsedMs = Date.now() - t0;
@@ -1908,6 +1958,7 @@ async function loadWizardLlmCatalogAsync() {
       providers,
       generatedAt: new Date().toISOString(),
       catalogFetchMs: elapsedMs,
+      catalogStrategy,
     };
   } catch (err) {
     const detail = err?.message || String(err);
