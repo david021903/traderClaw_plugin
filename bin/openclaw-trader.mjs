@@ -14,8 +14,42 @@ import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
 
 const execFileAsync = promisify(execFile);
 
-/** Parallel per-provider `openclaw models list` — wall time ~max(single), not sum of all providers. */
-const OPENCLAW_MODELS_PER_PROVIDER_TIMEOUT_MS = 16_000;
+/** Fast wizard catalog lookup: prefer one full list, then only probe key providers. */
+const OPENCLAW_MODELS_FLAT_TIMEOUT_MS = 7_500;
+const OPENCLAW_MODELS_PER_PROVIDER_TIMEOUT_MS = 4_500;
+const WIZARD_PRIORITY_PROVIDERS = [
+  "anthropic",
+  "openai",
+  "openrouter",
+  "google",
+  "xai",
+  "deepseek",
+  "groq",
+  "mistral",
+];
+const WIZARD_PROVIDER_PRIORITY = [
+  ...WIZARD_PRIORITY_PROVIDERS,
+  "perplexity",
+  "together",
+  "openai-codex",
+  "google-vertex",
+  "amazon-bedrock",
+  "vercel-ai-gateway",
+  "nvidia",
+  "moonshot",
+  "qwen",
+  "cerebras",
+  "minimax",
+];
+let wizardLlmCatalogPromise = null;
+
+function compareWizardProviderPriority(a, b) {
+  const ai = WIZARD_PROVIDER_PRIORITY.indexOf(a);
+  const bi = WIZARD_PROVIDER_PRIORITY.indexOf(b);
+  const aRank = ai >= 0 ? ai : Number.MAX_SAFE_INTEGER;
+  const bRank = bi >= 0 ? bi : Number.MAX_SAFE_INTEGER;
+  return aRank - bRank || a.localeCompare(b);
+}
 
 const PLUGIN_ROOT = resolvePluginPackageRoot(import.meta.url);
 const PLUGIN_PACKAGE_JSON = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf-8"));
@@ -1901,6 +1935,22 @@ async function loadWizardLlmCatalogAsync() {
         id: "mistral",
         models: [{ id: "mistral/mistral-large-latest", name: "Mistral Large" }],
       },
+      {
+        id: "perplexity",
+        models: [{ id: "perplexity/sonar-pro", name: "Sonar Pro" }],
+      },
+      {
+        id: "together",
+        models: [{ id: "together/moonshotai/Kimi-K2.5", name: "Kimi K2.5" }],
+      },
+      {
+        id: "nvidia",
+        models: [{ id: "nvidia/llama-3.3-70b-instruct", name: "Llama 3.3 70B Instruct" }],
+      },
+      {
+        id: "qwen",
+        models: [{ id: "qwen/qwen3-235b-a22b", name: "Qwen3 235B A22B" }],
+      },
     ],
   };
 
@@ -1908,7 +1958,8 @@ async function loadWizardLlmCatalogAsync() {
     return { ...fallback, warning: "openclaw_not_found" };
   }
 
-  const providerIds = [...supportedProviders].sort((a, b) => a.localeCompare(b));
+  const providerIds = [...supportedProviders].sort(compareWizardProviderPriority);
+  const priorityProviderIds = providerIds.filter((id) => WIZARD_PRIORITY_PROVIDERS.includes(id));
 
   async function fetchModelsForProvider(provider) {
     try {
@@ -1926,6 +1977,36 @@ async function loadWizardLlmCatalogAsync() {
     } catch (err) {
       return { provider, error: err };
     }
+  }
+
+  function seedFallbackProviderMap() {
+    return new Map(
+      fallback.providers.map((entry) => [
+        entry.id,
+        entry.models.map((model) => ({ ...model })),
+      ]),
+    );
+  }
+
+  function mergeCatalogModelsIntoMap(providerMap, models, expectedProvider = "") {
+    let added = 0;
+    for (const entry of models) {
+      if (!entry || typeof entry.key !== "string") continue;
+      const modelId = String(entry.key);
+      const slash = modelId.indexOf("/");
+      if (slash <= 0 || slash === modelId.length - 1) continue;
+      const provider = modelId.slice(0, slash);
+      if (!supportedProviders.has(provider)) continue;
+      if (expectedProvider && provider !== expectedProvider) continue;
+      const existing = providerMap.get(provider) || [];
+      existing.push({
+        id: modelId,
+        name: typeof entry.name === "string" && entry.name.trim() ? entry.name : modelId,
+      });
+      providerMap.set(provider, existing);
+      added += 1;
+    }
+    return added;
   }
 
   function buildProvidersFromMap(providerMap) {
@@ -1951,86 +2032,80 @@ async function loadWizardLlmCatalogAsync() {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 50 * 1024 * 1024,
-      timeout: 45_000,
+      timeout: OPENCLAW_MODELS_FLAT_TIMEOUT_MS,
       env: NO_COLOR_ENV,
     });
     const parsed = extractJson(raw);
-    if (!parsed) return;
+    if (!parsed) return 0;
     const models = Array.isArray(parsed?.models) ? parsed.models : [];
-    for (const entry of models) {
-      if (!entry || typeof entry.key !== "string") continue;
-      const modelId = String(entry.key);
-      const slash = modelId.indexOf("/");
-      if (slash <= 0 || slash === modelId.length - 1) continue;
-      const provider = modelId.slice(0, slash);
-      if (!supportedProviders.has(provider)) continue;
-      const existing = providerMap.get(provider) || [];
-      existing.push({
-        id: modelId,
-        name: typeof entry.name === "string" && entry.name.trim() ? entry.name : modelId,
-      });
-      providerMap.set(provider, existing);
-    }
+    return mergeCatalogModelsIntoMap(providerMap, models);
   }
 
   try {
     const t0 = Date.now();
-    const batches = await Promise.all(providerIds.map((p) => fetchModelsForProvider(p)));
-    const providerMap = new Map();
+    const liveProviderMap = new Map();
+    let catalogStrategy = "flat_all";
+    let flatError = "";
+    let liveAdded = 0;
+    try {
+      liveAdded = mergeFlatCatalogIntoMap(liveProviderMap);
+    } catch (err) {
+      flatError = err instanceof Error ? err.message : String(err);
+    }
 
-    for (const batch of batches) {
-      if (batch.error || !batch.stdout) continue;
-      const parsed = extractJson(batch.stdout);
-      if (!parsed) continue;
-      const models = Array.isArray(parsed?.models) ? parsed.models : [];
-      const want = batch.provider;
-      for (const entry of models) {
-        if (!entry || typeof entry.key !== "string") continue;
-        const modelId = String(entry.key);
-        const slash = modelId.indexOf("/");
-        if (slash <= 0 || slash === modelId.length - 1) continue;
-        const provider = modelId.slice(0, slash);
-        if (provider !== want) continue;
-        const existing = providerMap.get(provider) || [];
-        existing.push({
-          id: modelId,
-          name: typeof entry.name === "string" && entry.name.trim() ? entry.name : modelId,
-        });
-        providerMap.set(provider, existing);
+    let batches = [];
+    if (liveAdded === 0) {
+      catalogStrategy = "priority_parallel";
+      batches = await Promise.all(priorityProviderIds.map((p) => fetchModelsForProvider(p)));
+      for (const batch of batches) {
+        if (batch.error || !batch.stdout) continue;
+        const parsed = extractJson(batch.stdout);
+        if (!parsed) continue;
+        const models = Array.isArray(parsed?.models) ? parsed.models : [];
+        liveAdded += mergeCatalogModelsIntoMap(liveProviderMap, models, batch.provider);
       }
     }
 
-    let providers = buildProvidersFromMap(providerMap);
-    let catalogStrategy = "parallel";
-
-    if (providers.length === 0) {
-      catalogStrategy = "legacy_fallback";
-      try {
-        mergeFlatCatalogIntoMap(providerMap);
-        providers = buildProvidersFromMap(providerMap);
-      } catch (legacyErr) {
-        console.error(
-          `[traderclaw] loadWizardLlmCatalog legacy fallback failed: ${legacyErr instanceof Error ? legacyErr.message : String(legacyErr)}`,
-        );
-      }
-    }
-
+    let providers = buildProvidersFromMap(liveProviderMap);
     if (providers.length === 0) {
       const failedParallel = batches.filter((b) => b.error).length;
-      const hint =
-        failedParallel > 0
-          ? ` (${failedParallel}/${batches.length} per-provider openclaw calls failed — check OpenClaw version supports: openclaw models list --all --provider <id> --json)`
-          : "";
-      return { ...fallback, warning: `openclaw_model_catalog_empty${hint}` };
+      const details = [];
+      if (flatError) details.push(`flat list failed: ${flatError.slice(0, 160)}`);
+      if (failedParallel > 0) {
+        details.push(
+          `${failedParallel}/${priorityProviderIds.length} priority provider lookups failed`,
+        );
+      }
+      return {
+        ...fallback,
+        warning: `openclaw_model_catalog_unavailable${details.length ? ` (${details.join("; ")})` : ""}`,
+      };
     }
 
+    const mergedProviderMap = new Map(liveProviderMap);
+    for (const [provider, models] of seedFallbackProviderMap()) {
+      if (!mergedProviderMap.has(provider) || (mergedProviderMap.get(provider) || []).length === 0) {
+        mergedProviderMap.set(provider, models);
+      }
+    }
+    providers = buildProvidersFromMap(mergedProviderMap);
+
     const elapsedMs = Date.now() - t0;
+    const source =
+      providers.length > buildProvidersFromMap(liveProviderMap).length ? "hybrid" : "openclaw";
+    const warning =
+      source === "hybrid" && flatError
+        ? `loaded priority providers; kept curated defaults for the rest (${flatError.slice(0, 160)})`
+        : source === "hybrid"
+          ? "loaded priority providers; kept curated defaults for the rest"
+          : "";
     return {
-      source: "openclaw",
+      source,
       providers,
       generatedAt: new Date().toISOString(),
       catalogFetchMs: elapsedMs,
       catalogStrategy,
+      ...(warning ? { warning } : {}),
     };
   } catch (err) {
     const detail = err?.message || String(err);
@@ -2334,7 +2409,7 @@ function wizardHtml(defaults) {
           const updateHint = () => {
             const elapsedSeconds = Math.max(1, Math.floor((Date.now() - llmLoadStartedAt) / 1000));
             if (elapsedSeconds >= 8) {
-              llmLoadingHintTextEl.textContent = "Still loading provider catalog (" + elapsedSeconds + "s). First run can take up to ~60s.";
+              llmLoadingHintTextEl.textContent = "Still loading provider catalog (" + elapsedSeconds + "s). This should usually finish in under ~10s.";
               return;
             }
             llmLoadingHintTextEl.textContent = "Fetching provider list (" + elapsedSeconds + "s)...";
@@ -2403,10 +2478,13 @@ function wizardHtml(defaults) {
           setSelectOptions(llmProviderEl, providers, "${defaults.llmProvider}");
           refreshModelOptions("${defaults.llmModel}");
           const isFallback = llmCatalog.source === "fallback";
+          const isHybrid = llmCatalog.source === "hybrid";
           const catalogMsg = isFallback
-            ? "Showing safe defaults only (could not load full OpenClaw catalog" + (llmCatalog.warning ? ": " + llmCatalog.warning : "") + "). These providers still work — pick one and paste your credential."
-            : "LLM providers loaded. Select provider and paste credential to continue. Model selection is optional.";
-          setLlmCatalogReady(true, catalogMsg, isFallback);
+            ? "Showing curated safe defaults only (could not load live OpenClaw catalog" + (llmCatalog.warning ? ": " + llmCatalog.warning : "") + "). Anthropic and OpenAI stay ready first, with several other providers still available."
+            : isHybrid
+              ? "Loaded priority providers first and filled the rest with curated defaults" + (llmCatalog.warning ? " (" + llmCatalog.warning + ")" : "") + "."
+              : "LLM providers loaded. Select provider and paste credential to continue. Model selection is optional.";
+          setLlmCatalogReady(true, catalogMsg, isFallback || isHybrid);
         } catch (err) {
           setLlmCatalogReady(false, "Failed to load LLM providers. Check OpenClaw and reload this page.", true);
           manualEl.textContent = "Failed to load LLM provider catalog: " + (err && err.message ? err.message : String(err));
@@ -2782,7 +2860,13 @@ async function cmdInstall(args) {
 
     if (req.method === "GET" && req.url === "/api/llm/options") {
       try {
-        const payload = await loadWizardLlmCatalogAsync();
+        if (!wizardLlmCatalogPromise) {
+          wizardLlmCatalogPromise = loadWizardLlmCatalogAsync().catch((err) => {
+            wizardLlmCatalogPromise = null;
+            throw err;
+          });
+        }
+        const payload = await wizardLlmCatalogPromise;
         respondJson(200, payload);
       } catch (err) {
         respondJson(500, {
