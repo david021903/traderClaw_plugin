@@ -1905,11 +1905,23 @@ async function loadWizardLlmCatalogAsync() {
     providers: [
       {
         id: "anthropic",
-        models: [{ id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6 (recommended default)" }],
+        models: [
+          { id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6 (recommended default)" },
+          { id: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6" },
+          { id: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5" },
+        ],
       },
       {
         id: "openai",
-        models: [{ id: "openai/gpt-5.4", name: "GPT-5.4" }],
+        models: [
+          { id: "openai/gpt-5.4", name: "GPT-5.4 (recommended default)" },
+          { id: "openai/gpt-5.4-mini", name: "GPT-5.4 mini" },
+          { id: "openai/gpt-5.4-nano", name: "GPT-5.4 nano" },
+        ],
+      },
+      {
+        id: "openai-codex",
+        models: [{ id: "openai-codex/gpt-5-codex", name: "GPT-5 Codex" }],
       },
       {
         id: "xai",
