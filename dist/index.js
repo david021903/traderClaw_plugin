@@ -1,4 +1,8 @@
 import {
+  readRecoverySecretFromDisk,
+  writeRecoverySecretToOpenclawAtomic
+} from "./chunk-SBYHSJLU.js";
+import {
   SessionManager
 } from "./chunk-PZCY6BQK.js";
 import {
@@ -23,13 +27,6 @@ import {
   IntelligenceLab
 } from "./chunk-C24QA3MQ.js";
 import {
-  scrubUntrustedText
-} from "./chunk-AI6MTHUN.js";
-import {
-  readRecoverySecretFromDisk,
-  writeRecoverySecretToOpenclawAtomic
-} from "./chunk-SBYHSJLU.js";
-import {
   generateBulletinDigest,
   generateDecisionDigest,
   generateEntitlementsDigest,
@@ -37,6 +34,9 @@ import {
   resolveMemoryDir,
   resolveWorkspaceRoot
 } from "./chunk-JO3BXAUQ.js";
+import {
+  scrubUntrustedText
+} from "./chunk-AI6MTHUN.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
@@ -790,6 +790,10 @@ function parseConfig(raw) {
   const xConfig = parseXConfig(obj);
   const betaRaw = obj.beta && typeof obj.beta === "object" && !Array.isArray(obj.beta) ? obj.beta : {};
   const beta = { xPosting: betaRaw.xPosting === true };
+  const rawDash = obj.dashboardSocketEnabled;
+  const dashboardSocketEnabled = rawDash === true || rawDash === "true" || String(rawDash ?? "").toLowerCase() === "on";
+  const dashboardLogPath = typeof obj.dashboardLogPath === "string" ? obj.dashboardLogPath : void 0;
+  const apiSecret = typeof obj.apiSecret === "string" ? obj.apiSecret : void 0;
   return {
     orchestratorUrl,
     walletId,
@@ -811,7 +815,10 @@ function parseConfig(raw) {
     bootstrapBulletinWindowHours,
     dailyLogRetentionDays,
     xConfig,
-    beta
+    beta,
+    dashboardSocketEnabled,
+    dashboardLogPath,
+    apiSecret
   };
 }
 function buildTraderClawWelcomeMessage(apiKeyForDisplay) {
@@ -3983,6 +3990,30 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
           api.logger.info(`[solana-trader] Forward probe result: ${JSON.stringify(probe)}`);
         } catch (err) {
           api.logger.warn(`[solana-trader] Forward probe failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        if (config.dashboardSocketEnabled) {
+          const secret = typeof config.apiSecret === "string" && config.apiSecret.trim() ? config.apiSecret.trim() : void 0;
+          const hmacKey = sessionManager.getApiKey();
+          if (!secret || !hmacKey) {
+            api.logger.warn(
+              "[solana-trader] dashboardSocketEnabled requires apiSecret in plugin config and a resolved apiKey after session init \u2014 dashboard log forwarder not started"
+            );
+          } else {
+            const logPath = typeof config.dashboardLogPath === "string" && config.dashboardLogPath.trim() || (typeof process.env.TRADERCLAW_OPENCLAW_LOG_PATH === "string" ? process.env.TRADERCLAW_OPENCLAW_LOG_PATH.trim() : "") || "/tmp/openclaw/openclaw.log";
+            import("./src/dashboard-log-forwarder.js").then(({ startDashboardLogForwarder }) => {
+              startDashboardLogForwarder({
+                baseUrl: orchestratorUrl,
+                apiKey: hmacKey,
+                apiSecret: secret,
+                logPath,
+                logger: (msg) => api.logger.info(msg)
+              });
+            }).catch((err) => {
+              api.logger.warn(
+                `[solana-trader] dashboard log forwarder failed to load: ${err instanceof Error ? err.message : String(err)}`
+              );
+            });
+          }
         }
       }
     });
