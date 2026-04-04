@@ -13,7 +13,7 @@ Things like:
 - Rate limit observations
 - Anything environment-specific
 
-## Tool Inventory (101 tools — 98 Solana + 3 X read-only)
+## Tool Inventory (97 tools — 94 Solana + 3 X read-only)
 
 Every tool has a mandatory trigger — when the trigger condition is met, you MUST call the tool. "Cron-only" tools are called during cron jobs, not the heartbeat fast loop.
 
@@ -27,7 +27,7 @@ Every tool has a mandatory trigger — when the trigger condition is met, you MU
 | `solana_gateway_credentials_set` | Register gateway URL and token | When gateway is not registered (startup) |
 | `solana_gateway_forward_probe` | Test forwarding path health | Startup sequence; when events stop arriving |
 
-### Wallet & Capital (11)
+### Wallet & Capital (8)
 | Tool | Purpose | When to Call |
 |---|---|---|
 | `solana_wallets` | List all wallets | Startup; when user asks about wallets |
@@ -38,11 +38,6 @@ Every tool has a mandatory trigger — when the trigger condition is met, you MU
 | `solana_sweep_dead_tokens` | Batch-exit losing positions | `dead_money_sweep` cron; Step 0 when multiple dead positions found |
 | `solana_killswitch_status` | Check kill switch state | Step 0 every heartbeat |
 | `solana_killswitch` | Toggle kill switch (enabled + mode) | When consecutive loss limit hit; when user requests |
-| `risk_management_get_default` | Read per-wallet default TP/SL/trailing used when buys omit risk | Before relying on implicit defaults; after user asks about protection |
-| `risk_management_set_default` | Save per-wallet default exit plan for future buys | When user or policy wants custom defaults instead of platform system default |
-| `trade_size_limit_get` | Read max **buy** size (SOL) from wallet `limits` (default 1.5) | Before every buy or when user asks about size limits |
-| `trade_size_limit_set` | Set max **buy** size (SOL) on wallet `limits` | When user asks to change the per-order cap |
-| `position_risk_management_update` | Adjust TP/SL/trailing **numbers** on an open position (same level count) | After entry when refining exits without removing levels |
 
 ### Scanning & Discovery (4)
 | Tool | Purpose | When to Call |
@@ -119,13 +114,12 @@ Every tool has a mandatory trigger — when the trigger condition is met, you MU
 | `solana_bitquery_subscriptions` | List active subscriptions | Step 1: check for buffered events; `subscription_cleanup` cron |
 | `solana_bitquery_subscription_reopen` | Renew expiring subscription | `subscription_cleanup` cron for subscriptions nearing 24h expiry |
 
-### Memory & State (13)
+### Memory & State (12)
 | Tool | Purpose | When to Call |
 |---|---|---|
 | `solana_state_save` | Persist durable state + MEMORY.md | Step 8 every heartbeat if state changed |
 | `solana_state_read` | Read durable state | When MEMORY.md is missing or stale |
 | `solana_daily_log` | Append to daily log | Step 8 every heartbeat — mandatory |
-| `solana_memory_trim` | Smart memory compaction (daily logs, stale state, old decisions/bulletin, stale snapshots). Reports bytesFreed | `memory_trim` cron daily at 03:00 UTC |
 | `solana_decision_log` | Log trade decisions | Step 5 before every trade; Step 8 for significant non-trade decisions |
 | `solana_team_bulletin_post` | Post to team bulletin | Step 8 every heartbeat with tag `position_update` — mandatory |
 | `solana_team_bulletin_read` | Read team bulletin | Memory context load; when checking multi-agent coordination |

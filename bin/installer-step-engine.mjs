@@ -1,17 +1,17 @@
-import { execFileSync, execSync, spawn } from "child_process";
+import { execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { dirname, join } from "path";
-import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
+import { fileURLToPath } from "url";
 import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
 import { getLinuxGatewayPersistenceSnapshot } from "./gateway-persistence-linux.mjs";
 
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 
-/** Directory containing solana-traderclaw (openclaw.plugin.json) — works for plugin layout or traderclaw-cli + dependency. */
-const PLUGIN_PACKAGE_ROOT = resolvePluginPackageRoot(import.meta.url);
+/** Directory containing this package when running from a git checkout or global npm install. */
+const PLUGIN_PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function readPluginPackageVersion() {
   const pkgJsonPath = join(PLUGIN_PACKAGE_ROOT, "package.json");
@@ -768,7 +768,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "30 */2 * * *",
       agentId,
       message:
-        "CRON_JOB: portfolio_risk_audit\n\nStep 1: Call solana_capital_status to get wallet balance and portfolio value.\n\nStep 2: Call solana_positions to get all open positions with entry prices and sizes.\n\nStep 3: For each open position, call solana_token_snapshot to get current price, 24h volume, and market cap.\n\nStep 4: Run concentration check — flag WARNING if any single position exceeds 30 percent of total portfolio value, CRITICAL if above 50 percent.\n\nStep 5: Run exposure check — flag WARNING if total exposure exceeds 50 percent of wallet balance, CRITICAL if above 75 percent.\n\nStep 6: Run drawdown check — CRITICAL if portfolio drawdown exceeds 25 percent from peak capital.\n\nStep 7: Calculate portfolio heat (sum of all position risk scores). Flag WARNING above 50 percent, CRITICAL above 75 percent.\n\nStep 8: Run liquidity check — WARNING if any position exceeds 2 percent of its pool depth.\n\nStep 9: Check solana_killswitch_status.\n\nStep 10: Write risk report via solana_memory_write with tag 'risk_audit'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        "CRON_JOB: portfolio_risk_audit — Portfolio stress tests, exposure checks, correlation analysis, drawdown monitoring. Produce risk report for CTO.",
       enabled: true,
     },
     {
@@ -776,15 +776,15 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 */3 * * *",
       agentId,
       message:
-        "CRON_JOB: source_reputation_recalc\n\nStep 1: Call solana_alpha_sources to get per-source performance stats (signal count, conversion rate, avg score).\n\nStep 2: Call solana_alpha_history to get recent signal history with scores and source identifiers.\n\nStep 3: Call solana_trades to get recent trade outcomes. Cross-reference each trade back to its originating signal source.\n\nStep 4: For each source, calculate: win rate (trades that hit TP vs SL), average PnL per trade, signal-to-trade conversion rate.\n\nStep 5: Assign tier rankings:\n- TIER-1 (LOCK): Win rate above 60% AND 5+ trades AND positive avg PnL\n- TIER-2 (CONDITIONAL): Win rate 30-60% OR fewer than 5 trades\n- TIER-3 (BLACKLIST): Win rate below 30% with 5+ trades\n\nStep 6: Write scorecard to memory using solana_memory_write with tag 'source_reputation'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        "CRON_JOB: source_reputation_recalc — Analyze which alpha signal sources led to wins vs losses. Update reputation tracking in memory.",
       enabled: true,
     },
     {
-      id: "meta-rotation",
+      id: "meta-rotation-analysis",
       schedule: "30 */3 * * *",
       agentId,
       message:
-        "CRON_JOB: meta_rotation_analysis\n\nStep 0: Call x_search_tweets with queries: 'solana memecoin', 'pump fun gem', 'sol alpha'. Note which token names and narratives appear most frequently in the last 3 hours. Use this social signal to validate or challenge the on-chain data in the following steps.\n\nStep 1: Call solana_scan_launches to get recent token launches (last 3-6 hours).\n\nStep 2: Categorize each token by narrative cluster: AI/Agents, Animal Memes, Political, Celebrity/IP, DeFi, Gaming, Culture/Humor, Other.\n\nStep 3: For each cluster, aggregate: token count, total volume, average market cap.\n\nStep 4: Call solana_memory_search for 'meta_rotation' to compare with prior scan.\n\nStep 5: Classify each narrative: GAINING, SATURATED, COOLING, DORMANT.\n\nStep 6: Write rotation report via solana_memory_write with tag 'meta_rotation'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        "CRON_JOB: meta_rotation_analysis — Analyze narrative clusters across recent scans and trades. Identify hot vs cooling metas. Write observations to memory.",
       enabled: true,
     },
     {
@@ -800,7 +800,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "15 * * * *",
       agentId,
       message:
-        "CRON_JOB: subscription_cleanup\n\nStep 1: Call solana_positions to get all open positions and extract their contract addresses.\n\nStep 2: Call solana_bitquery_subscriptions to list all active Bitquery subscriptions. If this call returns an AUTH_SCOPE_MISSING error, log the error to memory and stop gracefully — do not retry or error out.\n\nStep 3: For each active subscription, check if the associated token CA still has an open position. Build two lists: 'matched' (has position) and 'orphaned' (no position).\n\nStep 4: Unsubscribe orphans via solana_bitquery_unsubscribe.\n\nStep 5: Reopen subscriptions nearing 24h expiry via solana_bitquery_subscription_reopen.\n\nStep 6: Write summary via solana_memory_write with tag 'subscription_cleanup'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        "CRON_JOB: subscription_cleanup — Check active Bitquery subscriptions. Unsubscribe from streams no longer needed (sold tokens, closed positions).",
       enabled: true,
     },
     {
@@ -941,12 +941,94 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     config.channels.defaults.heartbeat.showOk = true;
   }
 
+  if (!config.agents.defaults || typeof config.agents.defaults !== "object") {
+    config.agents.defaults = {};
+  }
+  if (!config.agents.defaults.heartbeat || typeof config.agents.defaults.heartbeat !== "object") {
+    config.agents.defaults.heartbeat = {};
+  }
+  const hbDefaults = config.agents.defaults.heartbeat;
+  if (!hbDefaults.every) hbDefaults.every = defaultHeartbeatEvery;
+  if (hbDefaults.isolatedSession === undefined) hbDefaults.isolatedSession = true;
+  if (hbDefaults.lightContext === undefined) hbDefaults.lightContext = true;
+  if (!hbDefaults.target) hbDefaults.target = "last";
+
+  if (!config.memory || typeof config.memory !== "object") config.memory = {};
+  if (!config.memory.backend) config.memory.backend = "qmd";
+  if (config.memory.citations === undefined) config.memory.citations = "auto";
+  if (!config.memory.qmd || typeof config.memory.qmd !== "object") config.memory.qmd = {};
+  const qmd = config.memory.qmd;
+  if (qmd.includeDefaultMemory === undefined) qmd.includeDefaultMemory = true;
+  if (!qmd.searchMode) qmd.searchMode = "query";
+  if (!qmd.update || typeof qmd.update !== "object") qmd.update = {};
+  if (!qmd.update.interval) qmd.update.interval = "5m";
+  if (qmd.update.debounceMs === undefined) qmd.update.debounceMs = 15000;
+  if (qmd.update.onBoot === undefined) qmd.update.onBoot = true;
+  if (qmd.update.waitForBootSync === undefined) qmd.update.waitForBootSync = false;
+  if (!qmd.limits || typeof qmd.limits !== "object") qmd.limits = {};
+  if (qmd.limits.maxResults === undefined) qmd.limits.maxResults = 6;
+  if (qmd.limits.timeoutMs === undefined) qmd.limits.timeoutMs = 8000;
+  if (qmd.limits.maxSnippetChars === undefined) qmd.limits.maxSnippetChars = 700;
+  if (!qmd.scope || typeof qmd.scope !== "object") qmd.scope = {};
+  if (!qmd.scope.default) qmd.scope.default = "deny";
+  if (!Array.isArray(qmd.scope.rules)) {
+    qmd.scope.rules = [
+      { action: "allow", match: { path: "memory/**" } },
+      { action: "deny", match: { path: "*.env" } },
+      { action: "deny", match: { path: "*.key" } },
+      { action: "deny", match: { path: "*.pem" } },
+      { action: "deny", match: { path: "session-tokens.json" } },
+      { action: "allow", match: { chatType: "direct" } },
+    ];
+  }
+  if (!Array.isArray(qmd.paths)) {
+    qmd.paths = [
+      { name: "decisionLog", path: "memory/decisions", pattern: "*.jsonl" },
+      { name: "dailyLog", path: "memory", pattern: "????-??-??.md" },
+    ];
+  }
+  if (!qmd.sessions || typeof qmd.sessions !== "object") qmd.sessions = {};
+  if (qmd.sessions.enabled === undefined) qmd.sessions.enabled = true;
+
+  if (!config.agents.defaults.memorySearch || typeof config.agents.defaults.memorySearch !== "object") {
+    config.agents.defaults.memorySearch = {};
+  }
+  const ms = config.agents.defaults.memorySearch;
+  if (ms.enabled === undefined) ms.enabled = true;
+  if (!ms.query || typeof ms.query !== "object") ms.query = {};
+  if (!ms.query.hybrid || typeof ms.query.hybrid !== "object") ms.query.hybrid = {};
+  if (ms.query.hybrid.enabled === undefined) ms.query.hybrid.enabled = true;
+  if (ms.query.hybrid.vectorWeight === undefined) ms.query.hybrid.vectorWeight = 0.7;
+  if (ms.query.hybrid.textWeight === undefined) ms.query.hybrid.textWeight = 0.3;
+  if (ms.query.hybrid.candidateMultiplier === undefined) ms.query.hybrid.candidateMultiplier = 4;
+  if (!ms.query.hybrid.mmr || typeof ms.query.hybrid.mmr !== "object") ms.query.hybrid.mmr = {};
+  if (ms.query.hybrid.mmr.enabled === undefined) ms.query.hybrid.mmr.enabled = true;
+  if (ms.query.hybrid.mmr.lambda === undefined) ms.query.hybrid.mmr.lambda = 0.7;
+  if (!ms.query.hybrid.temporalDecay || typeof ms.query.hybrid.temporalDecay !== "object") ms.query.hybrid.temporalDecay = {};
+  if (ms.query.hybrid.temporalDecay.enabled === undefined) ms.query.hybrid.temporalDecay.enabled = true;
+  if (ms.query.hybrid.temporalDecay.halfLifeDays === undefined) ms.query.hybrid.temporalDecay.halfLifeDays = 14;
+
   ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 
   const cronStorePath = resolveCronJobsStorePath(config);
   const cronMerge = mergeTraderCronJobsIntoStore(cronStorePath, targetJobs);
+
+  let qmdAvailable = false;
+  let qmdVersion = null;
+  try { qmdAvailable = commandExists("qmd"); } catch {}
+  if (qmdAvailable) {
+    qmdVersion = getCommandOutput("qmd --version");
+  } else {
+    if (typeof console !== "undefined") {
+      console.warn(
+        "[traderclaw] QMD binary not found. Memory engine will fall back to SQLite (no vector search, no temporal decay, no MMR).\n" +
+        "Install QMD:  bun install -g @tobilu/qmd\n" +
+        "Then restart the gateway:  openclaw gateway restart"
+      );
+    }
+  }
 
   return {
     configPath,
@@ -959,6 +1041,8 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     cronJobsStoreError: cronMerge.error,
     removedLegacyCronJobs,
     hooksConfigured: config.hooks.mappings.length,
+    qmdAvailable,
+    qmdVersion,
     isV2,
   };
 }
@@ -1214,21 +1298,8 @@ function persistXProfileIdentities(configPath, modeConfig, identities) {
 }
 
 function listProviderModels(provider) {
-  let raw;
-  try {
-    raw = execFileSync(
-      "openclaw",
-      ["models", "list", "--all", "--provider", provider, "--json"],
-      {
-        encoding: "utf-8",
-        maxBuffer: 25 * 1024 * 1024,
-        timeout: 20_000,
-        env: NO_COLOR_ENV,
-      },
-    ).trim();
-  } catch {
-    return [];
-  }
+  const cmd = `openclaw models list --all --provider ${shellQuote(provider)} --json`;
+  const raw = getCommandOutput(cmd);
   if (!raw) return [];
   const parsed = extractJson(raw);
   if (!parsed) return [];

@@ -2,10 +2,6 @@ import {
   SessionManager
 } from "./chunk-PZCY6BQK.js";
 import {
-  looksLikeTelegramChatId,
-  resolveTelegramRecipientToChatId
-} from "./chunk-5RCGTPR3.js";
-import {
   normalizeToolError,
   normalizeToolSuccess,
   renderToolEnvelope
@@ -18,10 +14,10 @@ import {
 } from "./chunk-3YPZOXWE.js";
 import {
   orchestratorRequest
-} from "./chunk-VUIYNUGF.js";
+} from "./chunk-T4YWGIIR.js";
 import {
   IntelligenceLab
-} from "./chunk-C24QA3MQ.js";
+} from "./chunk-IYD3TCSE.js";
 import {
   scrubUntrustedText
 } from "./chunk-AI6MTHUN.js";
@@ -36,7 +32,7 @@ import {
   generateStateMd,
   resolveMemoryDir,
   resolveWorkspaceRoot
-} from "./chunk-JO3BXAUQ.js";
+} from "./chunk-CMZLPU3Z.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
@@ -129,10 +125,9 @@ async function xApiFetch(method, endpoint, credentials, { body = null, queryPara
       };
     }
     if (response.status === 403) {
-      const isWrite = method === "POST" || method === "PUT" || method === "DELETE";
       return {
         ok: false,
-        error: isWrite ? "Forbidden (403). X rejected this write request. Check that App permissions are set to Read+Write in the X developer portal and regenerate your access tokens after any permission change." : "Forbidden (403). This read endpoint requires a paid X API tier (pay-as-you-go or Basic). This does NOT affect posting \u2014 x_post_tweet and x_reply_tweet still work on Free tier.",
+        error: "Forbidden (403). This read endpoint requires a paid X API tier (pay-as-you-go or Basic).",
         status: 403,
         data: responseData
       };
@@ -150,62 +145,6 @@ async function xApiFetch(method, endpoint, credentials, { body = null, queryPara
     data: responseData,
     rateLimitRemaining: rateLimitRemaining ? parseInt(rateLimitRemaining) : void 0
   };
-}
-function validateTweetText(text) {
-  if (!text || typeof text !== "string") {
-    return { valid: false, error: "Tweet text is required and must be a non-empty string." };
-  }
-  const trimmed = text.trim();
-  if (trimmed.length === 0) {
-    return { valid: false, error: "Tweet text cannot be empty." };
-  }
-  if (trimmed.length > MAX_TWEET_LENGTH) {
-    return { valid: false, error: `Tweet exceeds ${MAX_TWEET_LENGTH} characters (got ${trimmed.length}). Shorten the text.` };
-  }
-  return { valid: true, text: trimmed };
-}
-async function postTweet(credentials, text) {
-  const validation = validateTweetText(text);
-  if (!validation.valid) return { ok: false, error: validation.error };
-  const result = await xApiFetch("POST", "/tweets", credentials, {
-    body: { text: validation.text }
-  });
-  if (result.ok && result.data?.data?.id) {
-    const tweetId = result.data.data.id;
-    const username = credentials.username || "unknown";
-    return {
-      ok: true,
-      tweetId,
-      tweetUrl: `https://x.com/${username}/status/${tweetId}`,
-      text: validation.text
-    };
-  }
-  return result;
-}
-async function replyToTweet(credentials, tweetId, text) {
-  const validation = validateTweetText(text);
-  if (!validation.valid) return { ok: false, error: validation.error };
-  if (!tweetId || typeof tweetId !== "string") {
-    return { ok: false, error: "tweetId is required to reply." };
-  }
-  const result = await xApiFetch("POST", "/tweets", credentials, {
-    body: {
-      text: validation.text,
-      reply: { in_reply_to_tweet_id: tweetId }
-    }
-  });
-  if (result.ok && result.data?.data?.id) {
-    const replyId = result.data.data.id;
-    const username = credentials.username || "unknown";
-    return {
-      ok: true,
-      replyId,
-      replyUrl: `https://x.com/${username}/status/${replyId}`,
-      inReplyTo: tweetId,
-      text: validation.text
-    };
-  }
-  return result;
 }
 async function readMentions(credentials, { maxResults = 10, sinceId = null, paginationToken = null } = {}) {
   if (!credentials.userId) {
@@ -313,14 +252,15 @@ async function getThread(credentials, tweetId, { maxResults = 20 } = {}) {
 // lib/x-tools.mjs
 function parseXConfig(obj) {
   const xRaw = obj?.x && typeof obj.x === "object" && !Array.isArray(obj.x) ? obj.x : {};
-  const consumerKey = typeof xRaw.consumerKey === "string" ? xRaw.consumerKey : "";
-  const consumerSecret = typeof xRaw.consumerSecret === "string" ? xRaw.consumerSecret : "";
+  const consumerKey = typeof xRaw.consumerKey === "string" ? xRaw.consumerKey : process.env.X_CONSUMER_KEY || "";
+  const consumerSecret = typeof xRaw.consumerSecret === "string" ? xRaw.consumerSecret : process.env.X_CONSUMER_SECRET || "";
   const profiles = {};
   if (xRaw.profiles && typeof xRaw.profiles === "object" && !Array.isArray(xRaw.profiles)) {
     for (const [key, val] of Object.entries(xRaw.profiles)) {
       if (val && typeof val === "object" && !Array.isArray(val)) {
-        const accessToken = typeof val.accessToken === "string" ? val.accessToken : "";
-        const accessTokenSecret = typeof val.accessTokenSecret === "string" ? val.accessTokenSecret : "";
+        const envPrefix2 = `X_ACCESS_TOKEN_${key.toUpperCase().replace(/-/g, "_")}`;
+        const accessToken = typeof val.accessToken === "string" ? val.accessToken : process.env[envPrefix2] || "";
+        const accessTokenSecret = typeof val.accessTokenSecret === "string" ? val.accessTokenSecret : process.env[`${envPrefix2}_SECRET`] || "";
         if (accessToken && accessTokenSecret) {
           profiles[key] = {
             accessToken,
@@ -332,6 +272,13 @@ function parseXConfig(obj) {
       }
     }
   }
+  const defaultAgentId = typeof obj?.agentId === "string" ? obj.agentId : "cto";
+  const envPrefix = `X_ACCESS_TOKEN_${defaultAgentId.toUpperCase().replace(/-/g, "_")}`;
+  const envAccessToken = process.env[envPrefix] || "";
+  const envAccessTokenSecret = process.env[`${envPrefix}_SECRET`] || "";
+  if (!profiles[defaultAgentId] && envAccessToken && envAccessTokenSecret) {
+    profiles[defaultAgentId] = { accessToken: envAccessToken, accessTokenSecret: envAccessTokenSecret };
+  }
   if (consumerKey && consumerSecret) {
     return { ok: true, consumerKey, consumerSecret, profiles };
   }
@@ -340,7 +287,7 @@ function parseXConfig(obj) {
 function resolveAgentCredentials(xConfig, callerAgentId, requestedAgentId, fallbackAgentId) {
   const agentId = callerAgentId || requestedAgentId || fallbackAgentId || "cto";
   if (!xConfig || !xConfig.ok) {
-    return { ok: false, error: "X/Twitter configuration missing. Set 'x.consumerKey', 'x.consumerSecret', and 'x.profiles.<agentId>' in plugin config." };
+    return { ok: false, error: "X/Twitter configuration missing. Set 'x.consumerKey', 'x.consumerSecret', and 'x.profiles.<agentId>' in plugin config, or use X_CONSUMER_KEY / X_CONSUMER_SECRET env vars." };
   }
   const profile = xConfig.profiles[agentId];
   if (!profile) {
@@ -361,7 +308,6 @@ function resolveAgentCredentials(xConfig, callerAgentId, requestedAgentId, fallb
 }
 function registerXTools(api, Type2, xConfig, fallbackAgentId, logPrefix, options) {
   const checkPermission = options?.checkPermission || null;
-  const enableWriteTools = options?.enableWriteTools ?? false;
   const json = (data) => ({
     content: [{ type: "text", text: JSON.stringify(data, null, 2) }]
   });
@@ -380,37 +326,6 @@ function registerXTools(api, Type2, xConfig, fallbackAgentId, logPrefix, options
       return json({ error: err instanceof Error ? err.message : String(err) });
     }
   };
-  if (enableWriteTools) {
-    api.registerTool({
-      name: "x_post_tweet",
-      description: "Post a tweet to X/Twitter from the calling agent's configured profile. Max 280 characters.",
-      parameters: Type2.Object({
-        text: Type2.String({ description: "Tweet text (max 280 characters)" }),
-        agentId: Type2.Optional(Type2.String({ description: "Override agent ID (default: caller's agent identity)" }))
-      }),
-      execute: wrapExecute("x_post_tweet", async (_id, params) => {
-        const callerAgentId = params._agentId;
-        const creds = resolveAgentCredentials(xConfig, callerAgentId, params.agentId, fallbackAgentId);
-        if (!creds.ok) return { error: creds.error };
-        return postTweet(creds.credentials, params.text);
-      })
-    });
-    api.registerTool({
-      name: "x_reply_tweet",
-      description: "Reply to a specific tweet on X/Twitter. Max 280 characters.",
-      parameters: Type2.Object({
-        tweetId: Type2.String({ description: "The tweet ID to reply to" }),
-        text: Type2.String({ description: "Reply text (max 280 characters)" }),
-        agentId: Type2.Optional(Type2.String({ description: "Override agent ID (default: caller's agent identity)" }))
-      }),
-      execute: wrapExecute("x_reply_tweet", async (_id, params) => {
-        const callerAgentId = params._agentId;
-        const creds = resolveAgentCredentials(xConfig, callerAgentId, params.agentId, fallbackAgentId);
-        if (!creds.ok) return { error: creds.error };
-        return replyToTweet(creds.credentials, params.tweetId, params.text);
-      })
-    });
-  }
   api.registerTool({
     name: "x_read_mentions",
     description: "Read recent mentions of the agent's X profile. Requires pay-as-you-go or Basic tier X API access.",
@@ -469,9 +384,7 @@ function registerXTools(api, Type2, xConfig, fallbackAgentId, logPrefix, options
       });
     })
   });
-  const toolCount = enableWriteTools ? 5 : 3;
-  const writeNote = enableWriteTools ? "" : " (write tools disabled \u2014 set beta.xPosting: true in plugin config to enable x_post_tweet and x_reply_tweet)";
-  api.logger.info(`${logPrefix} Registered ${toolCount} X/Twitter tools${writeNote}. Profiles: ${xConfig.ok ? Object.keys(xConfig.profiles).join(", ") || "none" : "unconfigured"}`);
+  api.logger.info(`${logPrefix} Registered 3 X/Twitter read-only tools (social intel). Profiles: ${xConfig.ok ? Object.keys(xConfig.profiles).join(", ") || "none" : "unconfigured"}`);
 }
 
 // lib/web-fetch.mjs
@@ -774,13 +687,10 @@ function parseConfig(raw) {
   const externalUserId = typeof obj.externalUserId === "string" ? obj.externalUserId : void 0;
   const refreshToken = typeof obj.refreshToken === "string" ? obj.refreshToken : void 0;
   const walletPublicKey = typeof obj.walletPublicKey === "string" ? obj.walletPublicKey : void 0;
-  const walletPrivateKey = typeof obj.walletPrivateKey === "string" ? obj.walletPrivateKey : void 0;
   const apiTimeout = typeof obj.apiTimeout === "number" ? obj.apiTimeout : 12e4;
   const agentId = typeof obj.agentId === "string" ? obj.agentId : void 0;
   const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : void 0;
   const gatewayToken = typeof obj.gatewayToken === "string" ? obj.gatewayToken : void 0;
-  const forwardTelegramRecipient = typeof obj.forwardTelegramRecipient === "string" ? obj.forwardTelegramRecipient : typeof obj.forwardTelegramChatId === "string" ? obj.forwardTelegramChatId : void 0;
-  const telegramBotToken = typeof obj.telegramBotToken === "string" ? obj.telegramBotToken : void 0;
   const dataDir = typeof obj.dataDir === "string" ? obj.dataDir : void 0;
   const workspaceDir = typeof obj.workspaceDir === "string" ? obj.workspaceDir : void 0;
   const bootstrapDecisionCount = typeof obj.bootstrapDecisionCount === "number" ? obj.bootstrapDecisionCount : 10;
@@ -788,8 +698,6 @@ function parseConfig(raw) {
   const dailyLogRetentionDays = typeof obj.dailyLogRetentionDays === "number" ? obj.dailyLogRetentionDays : 30;
   const recoverySecret = typeof obj.recoverySecret === "string" ? obj.recoverySecret : void 0;
   const xConfig = parseXConfig(obj);
-  const betaRaw = obj.beta && typeof obj.beta === "object" && !Array.isArray(obj.beta) ? obj.beta : {};
-  const beta = { xPosting: betaRaw.xPosting === true };
   return {
     orchestratorUrl,
     walletId,
@@ -797,21 +705,17 @@ function parseConfig(raw) {
     externalUserId,
     refreshToken,
     walletPublicKey,
-    walletPrivateKey,
     recoverySecret,
     apiTimeout,
     agentId,
     gatewayBaseUrl,
     gatewayToken,
-    forwardTelegramRecipient,
-    telegramBotToken,
     dataDir,
     workspaceDir,
     bootstrapDecisionCount,
     bootstrapBulletinWindowHours,
     dailyLogRetentionDays,
-    xConfig,
-    beta
+    xConfig
   };
 }
 function buildTraderClawWelcomeMessage(apiKeyForDisplay) {
@@ -942,8 +846,8 @@ var solanaTraderPlugin = {
       refreshToken: effectiveRefreshToken,
       walletPublicKey: effectiveWalletPublicKey,
       walletPrivateKeyProvider: () => {
-        const k = config.walletPrivateKey;
-        return typeof k === "string" && k.trim() ? k.trim() : void 0;
+        const runtimeKey = process.env.TRADERCLAW_WALLET_PRIVATE_KEY || "";
+        return runtimeKey.trim() || void 0;
       },
       recoverySecretProvider: async () => {
         const fromDisk = readRecoverySecretFromDisk();
@@ -1026,18 +930,6 @@ var solanaTraderPlugin = {
         onUnauthorized
       });
     };
-    const patch = async (apiPath, body) => {
-      const token = await sessionManager.getAccessToken();
-      return orchestratorRequest({
-        baseUrl: orchestratorUrl,
-        method: "PATCH",
-        path: apiPath,
-        body,
-        timeout: apiTimeout,
-        accessToken: token,
-        onUnauthorized
-      });
-    };
     const del = async (apiPath) => {
       const token = await sessionManager.getAccessToken();
       return orchestratorRequest({
@@ -1048,21 +940,6 @@ var solanaTraderPlugin = {
         accessToken: token,
         onUnauthorized
       });
-    };
-    const getTelegramBotToken = () => String(config.telegramBotToken || "").trim();
-    const resolveForwardTelegramDestination = async () => {
-      const raw = String(config.forwardTelegramRecipient || "").trim();
-      if (!raw) return "";
-      if (looksLikeTelegramChatId(raw)) return raw;
-      const botToken = getTelegramBotToken();
-      try {
-        return await resolveTelegramRecipientToChatId({ botToken, raw });
-      } catch (e) {
-        api.logger.warn(
-          `[solana-trader] Telegram recipient "${raw}" could not be resolved: ${e instanceof Error ? e.message : String(e)}`
-        );
-        return "";
-      }
     };
     const json = (data) => ({
       content: [{ type: "text", text: JSON.stringify(data, null, 2) }]
@@ -1478,12 +1355,7 @@ var solanaTraderPlugin = {
             description: "Advisory only \u2014 server decides position mode internally. Sent for future compatibility."
           })
         ),
-        idempotencyKey: Type.Optional(Type.String({ description: "Unique key to prevent duplicate executions (e.g., UUID). Server uses walletId + key for replay cache." })),
-        agentId: Type.Optional(
-          Type.String({
-            description: "Optional agent id for gateway-forwarded notices (e.g. main). If omitted, the plugin config `agentId` is sent when set so default-risk messages reach the right agent."
-          })
-        )
+        idempotencyKey: Type.Optional(Type.String({ description: "Unique key to prevent duplicate executions (e.g., UUID). Server uses walletId + key for replay cache." }))
       }),
       execute: wrapExecute("solana_trade_execute", async (_id, params) => {
         const headers = {};
@@ -1498,8 +1370,6 @@ var solanaTraderPlugin = {
           slPct: params.slPct,
           managementMode: params.managementMode
         };
-        const execAgentId = typeof params.agentId === "string" && params.agentId.trim().length > 0 ? params.agentId.trim() : config.agentId && String(config.agentId).trim().length > 0 ? String(config.agentId).trim() : void 0;
-        if (execAgentId) body.agentId = execAgentId;
         const tsExecute = params.trailingStop;
         if (tsExecute?.levels && Array.isArray(tsExecute.levels) && tsExecute.levels.length > 0) {
           body.trailingStop = tsExecute;
@@ -1719,7 +1589,7 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_positions",
-      description: "List trading positions with mark-to-market. **PnL:** for Solana wallets, `realizedPnl` / `unrealizedPnl` are returned in SOL-native units. `unrealizedReturnPct` is ROI on cost basis (for sweep-dead-tokens logic). **Exit plan (source of truth):** use each position's `tpLevelsDetailed`, `slLevels`, `trailingStopPct`, `trailingStopLevels`, and `deadlockState.exits` \u2014 never guess exits from mode tables or memory.",
+      description: "List trading positions with mark-to-market. **PnL:** for Solana wallets, `realizedPnl` / `unrealizedPnl` are returned in SOL-native units. `unrealizedReturnPct` is ROI on cost basis (for sweep-dead-tokens logic).",
       parameters: Type.Object({
         status: Type.Optional(Type.String({ description: "Filter by status: 'open', 'closed', or omit for all" }))
       }),
@@ -1727,122 +1597,6 @@ var solanaTraderPlugin = {
         let reqPath = `/api/wallet/positions?walletId=${walletId}`;
         if (params.status) reqPath += `&status=${params.status}`;
         return get(reqPath);
-      })
-    });
-    api.registerTool({
-      name: "risk_management_get_default",
-      description: "Read per-wallet default exit parameters used when a buy is executed **without** any TP/SL/trailing fields. Returns either the user's saved defaults or the platform system default (`source`: user | system).",
-      parameters: Type.Object({}),
-      execute: wrapExecute(
-        "risk_management_get_default",
-        async () => get(`/api/wallet/risk-defaults?walletId=${walletId}`)
-      )
-    });
-    api.registerTool({
-      name: "trade_size_limit_get",
-      description: "Read the per-wallet maximum **buy** size in SOL enforced by the API (stored in `wallet.limits.maxTradeSizeSol`; platform default 1.5 SOL when unset). Always use this before sizing buys; never guess the limit.",
-      parameters: Type.Object({}),
-      execute: wrapExecute(
-        "trade_size_limit_get",
-        async () => get(`/api/wallet/max-trade-size?walletId=${walletId}`)
-      )
-    });
-    api.registerTool({
-      name: "trade_size_limit_set",
-      description: "Set the per-wallet maximum buy size in SOL (persisted on the wallet `limits` JSON). Subject to a platform ceiling.",
-      parameters: Type.Object({
-        maxTradeSizeSol: Type.Number({ exclusiveMinimum: 0 })
-      }),
-      execute: wrapExecute(
-        "trade_size_limit_set",
-        async (_id, params) => put("/api/wallet/max-trade-size", {
-          walletId,
-          maxTradeSizeSol: params.maxTradeSizeSol
-        })
-      )
-    });
-    api.registerTool({
-      name: "risk_management_set_default",
-      description: "Save per-wallet default exit parameters (`tpExits`, `slExits`, `trailingStop.levels`) applied on buys that omit risk fields. Same shape as trade execute exit payloads.",
-      parameters: Type.Object({
-        tpExits: Type.Array(
-          Type.Object({
-            percent: Type.Number(),
-            amountPct: Type.Number()
-          }),
-          { minItems: 1 }
-        ),
-        slExits: Type.Array(
-          Type.Object({
-            percent: Type.Number(),
-            amountPct: Type.Number()
-          }),
-          { minItems: 1 }
-        ),
-        trailingStop: Type.Object({
-          levels: Type.Array(
-            Type.Object({
-              percentage: Type.Number(),
-              amount: Type.Optional(Type.Number()),
-              triggerAboveATH: Type.Optional(Type.Number())
-            }),
-            { minItems: 1, maxItems: 5 }
-          )
-        })
-      }),
-      execute: wrapExecute(
-        "risk_management_set_default",
-        async (_id, params) => put("/api/wallet/risk-defaults", {
-          walletId,
-          tpExits: params.tpExits,
-          slExits: params.slExits,
-          trailingStop: params.trailingStop
-        })
-      )
-    });
-    api.registerTool({
-      name: "position_risk_management_update",
-      description: "Update **percentages and amounts only** on an open position's live exit plan (CaptureSell + stored position metadata). Cannot add or remove levels \u2014 array lengths must match the existing subscription. Use after entry when refining TP/SL/trailing numerics.",
-      parameters: Type.Object({
-        tokenAddress: Type.String({ description: "SPL mint for the open position" }),
-        tpExits: Type.Optional(
-          Type.Array(
-            Type.Object({
-              percent: Type.Number(),
-              amountPct: Type.Number()
-            })
-          )
-        ),
-        slExits: Type.Optional(
-          Type.Array(
-            Type.Object({
-              percent: Type.Number(),
-              amountPct: Type.Number()
-            })
-          )
-        ),
-        trailingStop: Type.Optional(
-          Type.Object({
-            levels: Type.Array(
-              Type.Object({
-                percentage: Type.Number(),
-                amount: Type.Optional(Type.Number()),
-                triggerAboveATH: Type.Optional(Type.Number())
-              }),
-              { minItems: 1, maxItems: 5 }
-            )
-          })
-        )
-      }),
-      execute: wrapExecute("position_risk_management_update", async (_id, params) => {
-        const body = {
-          walletId,
-          tokenAddress: params.tokenAddress
-        };
-        if (params.tpExits) body.tpExits = params.tpExits;
-        if (params.slExits) body.slExits = params.slExits;
-        if (params.trailingStop) body.trailingStop = params.trailingStop;
-        return patch("/api/position/risk-management", body);
       })
     });
     api.registerTool({
@@ -2217,23 +1971,12 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_gateway_credentials_set",
-      description: "Register or update your OpenClaw Gateway credentials with the orchestrator. This enables event-to-agent forwarding \u2014 when subscriptions include agentId, the orchestrator delivers each stream event to your Gateway via /v1/responses. Call this once during initial setup (Step 0). The gatewayBaseUrl is your self-hosted OpenClaw Gateway's public URL. The gatewayToken is the Bearer token for authenticating forwarded events. Use forwardTelegramRecipient with your @username or numeric chat id \u2014 the plugin resolves usernames via Telegram getChat when plugin config telegramBotToken is set. Alternatively pass forwardTelegramChatId (numeric) or null to clear.",
+      description: "Register or update your OpenClaw Gateway credentials with the orchestrator. This enables event-to-agent forwarding \u2014 when subscriptions include agentId, the orchestrator delivers each stream event to your Gateway via /v1/responses. Call this once during initial setup (Step 0). The gatewayBaseUrl is your self-hosted OpenClaw Gateway's public URL. The gatewayToken is the Bearer token for authenticating forwarded events.",
       parameters: Type.Object({
         gatewayBaseUrl: Type.String({ description: "Your OpenClaw Gateway's public HTTPS URL (e.g., 'https://gateway.example.com')" }),
         gatewayToken: Type.String({ description: "Bearer token for authenticating forwarded events to your Gateway" }),
         agentId: Type.Optional(Type.String({ description: "Agent ID to associate credentials with (default: 'main'). Omit to store as the default fallback." })),
-        active: Type.Optional(Type.Boolean({ description: "Whether forwarding is active (default: true)" })),
-        forwardTelegramRecipient: Type.Optional(
-          Type.String({
-            description: "Telegram @username or numeric chat id. Resolved to chat id via Bot API when not numeric (requires telegramBotToken in plugin config)."
-          })
-        ),
-        forwardTelegramChatId: Type.Optional(
-          Type.Union([
-            Type.String({ description: "Numeric Telegram chat id (digits, optional leading -)" }),
-            Type.Null({ description: "Clear stored Telegram chat id" })
-          ])
-        )
+        active: Type.Optional(Type.Boolean({ description: "Whether forwarding is active (default: true)" }))
       }),
       execute: wrapExecute("solana_gateway_credentials_set", async (_id, params) => {
         const body = {
@@ -2242,22 +1985,12 @@ var solanaTraderPlugin = {
         };
         if (params.agentId) body.agentId = params.agentId;
         if (params.active !== void 0) body.active = params.active;
-        const recipientRaw = params.forwardTelegramRecipient;
-        if (recipientRaw !== void 0 && recipientRaw !== null && String(recipientRaw).trim()) {
-          const id = await resolveTelegramRecipientToChatId({
-            botToken: getTelegramBotToken(),
-            raw: String(recipientRaw)
-          });
-          body.forwardTelegramChatId = id;
-        } else if (params.forwardTelegramChatId !== void 0) {
-          body.forwardTelegramChatId = params.forwardTelegramChatId;
-        }
         return put("/api/agents/gateway-credentials", body);
       })
     });
     api.registerTool({
       name: "solana_gateway_credentials_get",
-      description: "Get the currently registered Gateway credentials for event-to-agent forwarding. Returns the gatewayBaseUrl, agentId, active status, forwardTelegramChatId (when set), and metadata. Use to verify Gateway setup is correct.",
+      description: "Get the currently registered Gateway credentials for event-to-agent forwarding. Returns the gatewayBaseUrl, agentId, active status, and masked token. Use to verify Gateway setup is correct.",
       parameters: Type.Object({}),
       execute: wrapExecute(
         "solana_gateway_credentials_get",
@@ -2332,45 +2065,26 @@ var solanaTraderPlugin = {
         }
         let gatewayStepOk = false;
         try {
-          const gbu = String(config.gatewayBaseUrl || "").trim();
-          const gt = String(config.gatewayToken || "").trim();
-          const forwardChatId = await resolveForwardTelegramDestination();
           const creds = await get("/api/agents/gateway-credentials");
           let activeCredential = getActiveCredential(creds);
           if (!activeCredential && autoFixGateway) {
+            const gbu = String(config.gatewayBaseUrl || "").trim();
+            const gt = String(config.gatewayToken || "").trim();
             if (gbu && gt) {
               const body = { gatewayBaseUrl: gbu, gatewayToken: gt, active: true };
               if (config.agentId) body.agentId = config.agentId;
-              if (forwardChatId) body.forwardTelegramChatId = forwardChatId;
               await put("/api/agents/gateway-credentials", body);
             }
           }
-          let refreshed = await get("/api/agents/gateway-credentials");
+          const refreshed = await get("/api/agents/gateway-credentials");
           activeCredential = getActiveCredential(refreshed);
-          if (activeCredential && autoFixGateway && gbu && gt && forwardChatId && !activeCredential.forwardTelegramChatId) {
-            const syncBody = {
-              gatewayBaseUrl: gbu,
-              gatewayToken: gt,
-              active: true,
-              forwardTelegramChatId: forwardChatId
-            };
-            if (config.agentId) syncBody.agentId = config.agentId;
-            await put("/api/agents/gateway-credentials", syncBody);
-            refreshed = await get("/api/agents/gateway-credentials");
-            activeCredential = getActiveCredential(refreshed);
-          }
           gatewayStepOk = Boolean(activeCredential);
           if (!gatewayStepOk) throw new Error("Gateway credentials are missing or inactive");
           pushStep({
             step: "solana_gateway_credentials_get",
             ok: true,
             ts: Date.now(),
-            details: {
-              active: true,
-              agentId: String(activeCredential?.agentId || config.agentId || "main"),
-              gatewayBaseUrl: String(activeCredential?.gatewayBaseUrl || ""),
-              forwardTelegramChatId: activeCredential?.forwardTelegramChatId != null ? String(activeCredential.forwardTelegramChatId) : ""
-            }
+            details: { active: true, agentId: String(activeCredential?.agentId || config.agentId || "main"), gatewayBaseUrl: String(activeCredential?.gatewayBaseUrl || "") }
           });
         } catch (err) {
           pushStep({
@@ -3212,306 +2926,6 @@ ${String(params.summary)}
       })
     });
     api.registerTool({
-      name: "solana_memory_trim",
-      description: "Smart memory compaction \u2014 trims local memory footprint while preserving critical data. Reports bytesFreed/bytesFreedMB. Cleans: daily logs older than retention window, stale state keys, old decision log entries (preserving trade entries/exits for 7 days), old bulletin entries, and stale context snapshots (keeps only newest). NEVER touches: identity/config state keys (tier, walletId, mode, strategyVersion, featureWeights, permanentLearnings, namedPatterns, discoveryFilters, watchlist, consecutiveLosses, totalTrades, winCount, lossCount, peakCapital), skill files, or server-side memory. Designed to run as a daily cron job.",
-      parameters: Type.Object({
-        retentionDays: Type.Optional(Type.Number({ description: "Number of days of data to retain. Default 2." })),
-        dryRun: Type.Optional(Type.Boolean({ description: "If true, report what would be trimmed without actually deleting. Default false." }))
-      }),
-      execute: wrapExecute("solana_memory_trim", async (_id, params) => {
-        const rawDays = typeof params.retentionDays === "number" ? params.retentionDays : 2;
-        const retentionDays = Math.max(1, Math.floor(rawDays));
-        const dryRun = Boolean(params.dryRun);
-        const now = /* @__PURE__ */ new Date();
-        const cutoffMs = now.getTime() - retentionDays * 24 * 60 * 60 * 1e3;
-        const tradeRetentionMs = now.getTime() - 7 * 24 * 60 * 60 * 1e3;
-        const summary = { retentionDays, dryRun, trimmedAt: now.toISOString() };
-        let bytesFreed = 0;
-        let dailyLogsDeleted = 0;
-        try {
-          if (fs.existsSync(memoryDir)) {
-            const files = fs.readdirSync(memoryDir).filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f));
-            for (const file of files) {
-              const dateStr = file.replace(".md", "");
-              if (new Date(dateStr).getTime() < cutoffMs) {
-                const filePath = path.join(memoryDir, file);
-                try {
-                  bytesFreed += fs.statSync(filePath).size;
-                } catch {
-                }
-                if (!dryRun) {
-                  try {
-                    fs.unlinkSync(filePath);
-                  } catch {
-                  }
-                }
-                dailyLogsDeleted++;
-              }
-            }
-          }
-        } catch {
-        }
-        summary.dailyLogsDeleted = dailyLogsDeleted;
-        const protectedStateKeys = /* @__PURE__ */ new Set([
-          "tier",
-          "walletId",
-          "mode",
-          "strategyVersion",
-          "regime",
-          "maxPositions",
-          "maxPositionSizeSol",
-          "defenseMode",
-          "killSwitchActive",
-          "permanentLearnings",
-          "regimeCanary",
-          "featureWeights",
-          "killSwitchReason",
-          "namedPatterns",
-          "discoveryFilters",
-          "watchlist",
-          "consecutiveLosses",
-          "totalTrades",
-          "winCount",
-          "lossCount",
-          "peakCapital"
-        ]);
-        let stateKeysPruned = 0;
-        let watchlistTrimmed = 0;
-        try {
-          const stateFiles = fs.existsSync(stateDir) ? fs.readdirSync(stateDir).filter((f) => f.endsWith(".json") && f !== "context-snapshot.json" && f !== "patterns.json") : [];
-          for (const sf of stateFiles) {
-            const statePath = path.join(stateDir, sf);
-            const raw = readJsonFile(statePath);
-            if (!raw || !raw.state || typeof raw.state !== "object") continue;
-            const state = raw.state;
-            const keysToRemove = [];
-            for (const key of Object.keys(state)) {
-              if (protectedStateKeys.has(key)) continue;
-              const val = state[key];
-              if (val === null || val === void 0) {
-                keysToRemove.push(key);
-                continue;
-              }
-              if (typeof val === "object" && !Array.isArray(val) && Object.keys(val).length === 0) {
-                keysToRemove.push(key);
-                continue;
-              }
-              if (Array.isArray(val) && val.length === 0) {
-                keysToRemove.push(key);
-                continue;
-              }
-              if (typeof val === "object" && val !== null) {
-                const obj = val;
-                const tsFields = ["ts", "timestamp", "updatedAt", "detectedAt", "lastUpdated", "lastRun"];
-                let foundStaleTs = false;
-                for (const tf of tsFields) {
-                  if (typeof obj[tf] === "string") {
-                    try {
-                      if (new Date(obj[tf]).getTime() < cutoffMs) {
-                        foundStaleTs = true;
-                      }
-                    } catch {
-                    }
-                    break;
-                  }
-                }
-                if (foundStaleTs) {
-                  keysToRemove.push(key);
-                  continue;
-                }
-              }
-              if (typeof val === "string") {
-                try {
-                  const parsed = new Date(val);
-                  if (!isNaN(parsed.getTime()) && /^\d{4}-\d{2}-\d{2}/.test(val) && parsed.getTime() < cutoffMs) {
-                    keysToRemove.push(key);
-                    continue;
-                  }
-                } catch {
-                }
-              }
-            }
-            let fileWatchlistTrimmed = 0;
-            if (state.watchlist && Array.isArray(state.watchlist) && state.watchlist.length > 0) {
-              const wl = state.watchlist;
-              const filtered = wl.filter((item) => {
-                if (typeof item === "object" && item !== null) {
-                  const obj = item;
-                  const ts = obj.addedAt || obj.ts || obj.timestamp;
-                  if (typeof ts === "string") {
-                    try {
-                      return new Date(ts).getTime() >= cutoffMs;
-                    } catch {
-                    }
-                  }
-                }
-                return true;
-              });
-              const capped = filtered.length > 10 ? filtered.slice(-10) : filtered;
-              if (capped.length < wl.length) {
-                fileWatchlistTrimmed = wl.length - capped.length;
-                if (!dryRun) state.watchlist = capped;
-              }
-            }
-            watchlistTrimmed += fileWatchlistTrimmed;
-            if (keysToRemove.length > 0 || fileWatchlistTrimmed > 0) {
-              stateKeysPruned += keysToRemove.length;
-              const sizeBefore = (() => {
-                try {
-                  return fs.statSync(statePath).size;
-                } catch {
-                  return 0;
-                }
-              })();
-              if (!dryRun) {
-                for (const k of keysToRemove) delete state[k];
-                raw.state = state;
-                raw.updatedAt = now.toISOString();
-                writeJsonFile(statePath, raw);
-                const aid = sf.replace(".json", "");
-                writeMemoryMd(aid, state);
-                const sizeAfter = (() => {
-                  try {
-                    return fs.statSync(statePath).size;
-                  } catch {
-                    return 0;
-                  }
-                })();
-                bytesFreed += Math.max(0, sizeBefore - sizeAfter);
-              } else {
-                bytesFreed += sizeBefore;
-              }
-            }
-          }
-        } catch {
-        }
-        summary.stateKeysPruned = stateKeysPruned;
-        summary.watchlistTrimmed = watchlistTrimmed;
-        const protectedDecisionTypes = /* @__PURE__ */ new Set(["trade_entry", "trade_exit", "position_update", "killswitch"]);
-        let decisionEntriesTrimmed = 0;
-        try {
-          if (fs.existsSync(logsDir)) {
-            const agentDirs = fs.readdirSync(logsDir).filter((d) => {
-              try {
-                return fs.statSync(path.join(logsDir, d)).isDirectory() && d !== "shared";
-              } catch {
-                return false;
-              }
-            });
-            for (const ad of agentDirs) {
-              const decLogPath = path.join(logsDir, ad, "decisions.jsonl");
-              if (!fs.existsSync(decLogPath)) continue;
-              const entries = readJsonlFile(decLogPath);
-              const kept = entries.filter((e) => {
-                const entryTs = new Date(e.ts).getTime();
-                if (protectedDecisionTypes.has(e.type || "")) return entryTs >= tradeRetentionMs;
-                return entryTs >= cutoffMs;
-              });
-              const removed = entries.length - kept.length;
-              if (removed > 0) {
-                decisionEntriesTrimmed += removed;
-                const sizeBefore = (() => {
-                  try {
-                    return fs.statSync(decLogPath).size;
-                  } catch {
-                    return 0;
-                  }
-                })();
-                if (!dryRun) {
-                  fs.writeFileSync(decLogPath, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length > 0 ? "\n" : ""), "utf-8");
-                  const sizeAfter = (() => {
-                    try {
-                      return fs.statSync(decLogPath).size;
-                    } catch {
-                      return 0;
-                    }
-                  })();
-                  bytesFreed += Math.max(0, sizeBefore - sizeAfter);
-                } else {
-                  bytesFreed += sizeBefore;
-                }
-              }
-            }
-          }
-        } catch {
-        }
-        summary.decisionEntriesTrimmed = decisionEntriesTrimmed;
-        let bulletinEntriesTrimmed = 0;
-        try {
-          const bulletinPath = path.join(sharedLogsDir, "team-bulletin.jsonl");
-          if (fs.existsSync(bulletinPath)) {
-            const entries = readJsonlFile(bulletinPath);
-            let kept = entries.filter((e) => new Date(e.ts).getTime() >= cutoffMs);
-            if (kept.length < 20 && entries.length >= 20) kept = entries.slice(-20);
-            else if (kept.length < 20) kept = entries;
-            const removed = entries.length - kept.length;
-            if (removed > 0) {
-              bulletinEntriesTrimmed = removed;
-              const sizeBefore = (() => {
-                try {
-                  return fs.statSync(bulletinPath).size;
-                } catch {
-                  return 0;
-                }
-              })();
-              if (!dryRun) {
-                fs.writeFileSync(bulletinPath, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length > 0 ? "\n" : ""), "utf-8");
-                const sizeAfter = (() => {
-                  try {
-                    return fs.statSync(bulletinPath).size;
-                  } catch {
-                    return 0;
-                  }
-                })();
-                bytesFreed += Math.max(0, sizeBefore - sizeAfter);
-              } else {
-                bytesFreed += sizeBefore;
-              }
-            }
-          }
-        } catch {
-        }
-        summary.bulletinEntriesTrimmed = bulletinEntriesTrimmed;
-        let snapshotsDeleted = 0;
-        try {
-          if (fs.existsSync(stateDir)) {
-            const snapshotFiles = fs.readdirSync(stateDir).filter((f) => f.startsWith("context-snapshot") && f.endsWith(".json"));
-            if (snapshotFiles.length > 1) {
-              const sorted = snapshotFiles.map((f) => ({
-                name: f,
-                mtime: (() => {
-                  try {
-                    return fs.statSync(path.join(stateDir, f)).mtimeMs;
-                  } catch {
-                    return 0;
-                  }
-                })()
-              })).sort((a, b) => b.mtime - a.mtime);
-              for (let i = 1; i < sorted.length; i++) {
-                const fp = path.join(stateDir, sorted[i].name);
-                try {
-                  bytesFreed += fs.statSync(fp).size;
-                } catch {
-                }
-                if (!dryRun) {
-                  try {
-                    fs.unlinkSync(fp);
-                  } catch {
-                  }
-                }
-                snapshotsDeleted++;
-              }
-            }
-          }
-        } catch {
-        }
-        summary.snapshotsDeleted = snapshotsDeleted;
-        summary.bytesFreed = bytesFreed;
-        summary.bytesFreedMB = Math.round(bytesFreed / 1024 / 1024 * 100) / 100;
-        return summary;
-      })
-    });
-    api.registerTool({
       name: "solana_candidate_write",
       description: "Upsert a candidate record in the local intelligence lab. Candidates are token opportunities being tracked for scoring, outcome labeling, and strategy learning. Features map is used for model scoring.",
       parameters: Type.Object({
@@ -3986,13 +3400,12 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
         }
       }
     });
-    registerXTools(api, Type, config.xConfig, config.agentId || "cto", "[solana-trader]", { enableWriteTools: config.beta?.xPosting ?? false });
+    registerXTools(api, Type, config.xConfig, config.agentId || "cto", "[solana-trader]");
     registerWebFetchTool(api, Type, "[solana-trader]");
-    const xWriteEnabled = config.beta?.xPosting ?? false;
-    const xToolCount = config.xConfig?.ok ? xWriteEnabled ? 5 : 3 : 0;
+    const xToolCount = config.xConfig?.ok ? 3 : 0;
     const webFetchCount = 1;
     const intelligenceToolCount = 17;
-    const baseToolCount = 77;
+    const baseToolCount = 76;
     const totalRegistered = baseToolCount + intelligenceToolCount + webFetchCount;
     const totalToolCount = totalRegistered + xToolCount;
     api.logger.info(

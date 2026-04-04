@@ -38,7 +38,7 @@
         agentId: "main",
         sessionTarget: "isolated",
         delivery: { mode: "none" },
-        message: "CRON_JOB: source_reputation_recalc\n\nStep 1: Call solana_alpha_sources to get per-source performance stats (signal count, conversion rate, avg score).\n\nStep 2: Call solana_alpha_history to get recent signal history with scores and source identifiers.\n\nStep 3: Call solana_trades to get recent trade outcomes. Cross-reference each trade back to its originating signal source.\n\nStep 4: For each source, calculate: win rate (trades that hit TP vs SL), average PnL per trade, signal-to-trade conversion rate.\n\nStep 5: Assign tier rankings:\n- TIER-1 (LOCK): Win rate above 60% AND 5+ trades AND positive avg PnL\n- TIER-2 (CONDITIONAL): Win rate 30-60% OR fewer than 5 trades\n- TIER-3 (BLACKLIST): Win rate below 30% with 5+ trades\n\nStep 6: Write scorecard to memory using solana_memory_write with tag 'source_reputation'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        message: "CRON_JOB: source_reputation_recalc\n\nStep 1: Call solana_alpha_sources to get per-source performance stats.\n\nStep 2: Call solana_alpha_history to get recent signal history.\n\nStep 3: Call solana_trades to get recent trade outcomes. Cross-reference each trade to its originating signal source.\n\nStep 4: For each source, calculate: win rate, average PnL, signal-to-trade conversion rate.\n\nStep 5: Assign tier rankings:\n- TIER-1 (LOCK): Win rate above 60% AND 5+ trades AND positive avg PnL\n- TIER-2 (CONDITIONAL): Win rate 30-60% OR fewer than 5 trades\n- TIER-3 (BLACKLIST): Win rate below 30% with 5+ trades\n\nStep 6: Write scorecard to memory using solana_memory_write with tag 'source_reputation'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
         enabled: true
       },
 
@@ -49,7 +49,7 @@
         agentId: "main",
         sessionTarget: "isolated",
         delivery: { mode: "none" },
-        message: "CRON_JOB: portfolio_risk_audit\n\nStep 1: Call solana_capital_status to get wallet balance and portfolio value.\n\nStep 2: Call solana_positions to get all open positions with entry prices and sizes.\n\nStep 3: For each open position, call solana_token_snapshot to get current price, 24h volume, and market cap.\n\nStep 4: Run concentration check — flag WARNING if any single position exceeds 30 percent of total portfolio value, CRITICAL if above 50 percent.\n\nStep 5: Run exposure check — flag WARNING if total exposure exceeds 50 percent of wallet balance, CRITICAL if above 75 percent.\n\nStep 6: Run drawdown check — CRITICAL if portfolio drawdown exceeds 25 percent from peak capital.\n\nStep 7: Calculate portfolio heat (sum of all position risk scores). Flag WARNING above 50 percent, CRITICAL above 75 percent.\n\nStep 8: Run liquidity check — WARNING if any position exceeds 2 percent of its pool depth.\n\nStep 9: Check solana_killswitch_status.\n\nStep 10: Write risk report via solana_memory_write with tag 'risk_audit'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        message: "CRON_JOB: portfolio_risk_audit\n\nStep 1: Call solana_capital_status for wallet balance and portfolio value.\n\nStep 2: Call solana_positions for all open positions.\n\nStep 3: For each position, call solana_token_snapshot for current price and volume.\n\nStep 4: Run concentration check — flag WARNING if any position > 30% of portfolio, CRITICAL if > 50%.\n\nStep 5: Run exposure check — flag WARNING if total exposure > 50% of wallet, CRITICAL if > 75%.\n\nStep 6: Run drawdown check — CRITICAL if drawdown exceeds 25% from peak.\n\nStep 7: Calculate portfolio heat. Flag WARNING > 50%, CRITICAL > 75%.\n\nStep 8: Run liquidity check — WARNING if position > 2% of pool depth.\n\nStep 9: Check solana_killswitch_status.\n\nStep 10: Write risk report via solana_memory_write with tag 'risk_audit'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
         enabled: true
       },
 
@@ -60,7 +60,7 @@
         agentId: "main",
         sessionTarget: "isolated",
         delivery: { mode: "none" },
-        message: "CRON_JOB: meta_rotation_analysis\n\nStep 0: Call x_search_tweets with queries: 'solana memecoin', 'pump fun gem', 'sol alpha'. Note which token names and narratives appear most frequently in the last 3 hours. Use this social signal to validate or challenge the on-chain data in the following steps.\n\nStep 1: Call solana_scan_launches to get recent token launches (last 3-6 hours).\n\nStep 2: Categorize each token by narrative cluster: AI/Agents, Animal Memes, Political, Celebrity/IP, DeFi, Gaming, Culture/Humor, Other.\n\nStep 3: For each cluster, aggregate: token count, total volume, average market cap.\n\nStep 4: Call solana_memory_search for 'meta_rotation' to compare with prior scan.\n\nStep 5: Classify each narrative: GAINING, SATURATED, COOLING, DORMANT.\n\nStep 6: Write rotation report via solana_memory_write with tag 'meta_rotation'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        message: "CRON_JOB: meta_rotation_analysis\n\nStep 1: Call solana_scan_launches to get recent launches (last 3-6 hours).\n\nStep 2: Categorize each token by narrative cluster: AI/Agents, Animal Memes, Political, Celebrity/IP, DeFi, Gaming, Culture/Humor, Other.\n\nStep 3: For each cluster, aggregate: token count, total volume, average market cap.\n\nStep 4: Call solana_memory_search for 'meta_rotation' to compare with prior scan.\n\nStep 5: Classify each narrative: GAINING, SATURATED, COOLING, DORMANT.\n\nStep 6: Write rotation report via solana_memory_write with tag 'meta_rotation'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
         enabled: true
       },
 
@@ -80,7 +80,7 @@
         agentId: "main",
         sessionTarget: "isolated",
         delivery: { mode: "none" },
-        message: "CRON_JOB: subscription_cleanup\n\nStep 1: Call solana_positions to get all open positions and extract their contract addresses.\n\nStep 2: Call solana_bitquery_subscriptions to list all active Bitquery subscriptions. If this call returns an AUTH_SCOPE_MISSING error, log the error to memory and stop gracefully — do not retry or error out.\n\nStep 3: For each active subscription, check if the associated token CA still has an open position. Build two lists: 'matched' (has position) and 'orphaned' (no position).\n\nStep 4: Unsubscribe orphans via solana_bitquery_unsubscribe.\n\nStep 5: Reopen subscriptions nearing 24h expiry via solana_bitquery_subscription_reopen.\n\nStep 6: Write summary via solana_memory_write with tag 'subscription_cleanup'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        message: "CRON_JOB: subscription_cleanup\n\nStep 1: Call solana_positions to get open position CAs.\n\nStep 2: Call solana_bitquery_subscriptions to list active subscriptions.\n\nStep 3: Build matched vs orphaned lists.\n\nStep 4: Unsubscribe orphans via solana_bitquery_unsubscribe.\n\nStep 5: Reopen subscriptions nearing 24h expiry via solana_bitquery_subscription_reopen.\n\nStep 6: Write summary via solana_memory_write with tag 'subscription_cleanup'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
         enabled: true
       },
 
@@ -134,17 +134,6 @@
         sessionTarget: "isolated",
         delivery: { mode: "none" },
         message: "CRON_JOB: source_trust_refresh\n\nStep 1: Call solana_source_trust_refresh to recalculate trust scores for all tracked alpha sources based on recent trade outcomes.\n\nStep 2: Call solana_deployer_trust_refresh to recalculate deployer trust scores based on recent token performance.\n\nStep 3: Call solana_source_trust_get to read updated scores. Flag any sources that dropped below 30 trust score.\n\nStep 4: Call solana_deployer_trust_get to read deployer scores. Flag any deployers with 3+ failed tokens.\n\nStep 5: Log trust score updates via solana_memory_write with tag 'trust_refresh'. Include: sources updated, deployers updated, flagged sources/deployers.\n\nDo not execute trades. Do not ask questions.",
-        enabled: true
-      },
-
-      // ── Memory Maintenance ──────────────────────────────────────────
-      {
-        id: "memory-trim",
-        schedule: "0 3 * * *",
-        agentId: "main",
-        sessionTarget: "isolated",
-        delivery: { mode: "none" },
-        message: "CRON_JOB: memory_trim\n\nStep 1: Call solana_memory_trim with dryRun true first to preview what will be trimmed.\n\nStep 2: Review the dry run summary. Verify no critical data is flagged for removal.\n\nStep 3: Call solana_memory_trim with retentionDays 2 to execute the trim.\n\nStep 4: Log the trim summary via solana_memory_write with tag 'memory_trim'. Include: daily logs deleted, state keys pruned, watchlist entries trimmed, decision entries trimmed, bulletin entries trimmed.\n\nDo not execute trades. Do not ask questions.",
         enabled: true
       }
     ]

@@ -1,14 +1,19 @@
 {
   "name": "solana-traderclaw",
-  "version": "1.0.61",
+  "version": "1.0.49",
   "description": "TraderClaw V1-Upgraded — Solana trading for OpenClaw with intelligence lab, tool envelopes, prompt scrubbing, read-only X social intel, and split skill docs",
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
     ".": "./dist/index.js"
   },
+  "bin": {
+    "traderclaw": "bin/traderclaw.cjs"
+  },
   "files": [
     "dist/",
+    "bin/*.mjs",
+    "bin/*.cjs",
     "skills/",
     "config/",
     "lib/",
@@ -17,9 +22,7 @@
   ],
   "scripts": {
     "build": "node build.mjs",
-    "prepublishOnly": "npm run build",
-    "sync-cli": "node scripts/sync-cli-version.mjs",
-    "release:patch": "node scripts/release-patch.mjs"
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "traderclaw",

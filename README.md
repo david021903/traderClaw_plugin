@@ -32,31 +32,24 @@ The plugin gives OpenClaw tools to interact with the Solana trading orchestrator
 
 ## Quick Start
 
-### 1. Install the plugin (OpenClaw)
+### 1. Install the plugin
+
+```bash
+npm install -g solana-traderclaw
+```
+
+Or install directly into OpenClaw:
 
 ```bash
 openclaw plugins install solana-traderclaw
 ```
 
-The `solana-traderclaw` tarball is the **plugin only** (no global `traderclaw` binary), so OpenClaw’s install scanner stays clean.
-
-### 2. Install the global CLI (optional)
-
-For `traderclaw --version`, `traderclaw install --wizard`, `traderclaw setup`, etc., install the companion package (it depends on `solana-traderclaw` and wires paths correctly):
-
-```bash
-npm install -g traderclaw-cli
-```
-
-That publishes the command name **`traderclaw`** on your PATH. From a git checkout you can also run `node bin/traderclaw.cjs …` at the repo root.
-
 Install name and config id are intentionally different:
-- npm plugin package: `solana-traderclaw`
-- global CLI package: `traderclaw-cli` (command: `traderclaw`)
+- npm package / install command: `solana-traderclaw`
 - OpenClaw plugin id in `openclaw.json`: `solana-trader`
 - OpenClaw allowlist entry: `plugins.allow: ["solana-trader"]`
 
-### 3. Run setup
+### 2. Run setup
 
 ```bash
 traderclaw setup
@@ -91,7 +84,7 @@ traderclaw precheck --allow-install --output linux-qa-install.log
 
 Use `--dry-run` for non-mutating validation and `--allow-install` for guided dependency installs.
 
-### 4. Run the mandatory startup sequence
+### 3. Run the mandatory startup sequence
 
 Send this prompt to your bot after startup:
 

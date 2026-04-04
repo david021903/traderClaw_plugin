@@ -2,77 +2,16 @@
 
 import { createInterface } from "readline";
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync, existsSync } from "fs";
-import { dirname, join } from "path";
-import { fileURLToPath, pathToFileURL } from "url";
+import { join } from "path";
 import { homedir } from "os";
 import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
-import { execFile, execSync } from "child_process";
-import { promisify } from "util";
+import { execSync } from "child_process";
 import { createServer } from "http";
-import { sortModelsByPreference, MAX_MODELS_PER_PROVIDER_SORT } from "./llm-model-preference.mjs";
-import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
+import { sortModelsByPreference } from "./llm-model-preference.mjs";
 
-const execFileAsync = promisify(execFile);
-
-/** Fast wizard catalog lookup: prefer one full list, then only probe key providers. */
-const OPENCLAW_MODELS_FLAT_TIMEOUT_MS = 7_500;
-const OPENCLAW_MODELS_PER_PROVIDER_TIMEOUT_MS = 4_500;
-const WIZARD_PRIORITY_PROVIDERS = [
-  "anthropic",
-  "openai",
-  "openrouter",
-  "google",
-  "xai",
-  "deepseek",
-  "groq",
-  "mistral",
-];
-const WIZARD_PROVIDER_PRIORITY = [
-  ...WIZARD_PRIORITY_PROVIDERS,
-  "perplexity",
-  "together",
-  "openai-codex",
-  "google-vertex",
-  "amazon-bedrock",
-  "vercel-ai-gateway",
-  "nvidia",
-  "moonshot",
-  "qwen",
-  "cerebras",
-  "minimax",
-];
-let wizardLlmCatalogPromise = null;
-
-function compareWizardProviderPriority(a, b) {
-  const ai = WIZARD_PROVIDER_PRIORITY.indexOf(a);
-  const bi = WIZARD_PROVIDER_PRIORITY.indexOf(b);
-  const aRank = ai >= 0 ? ai : Number.MAX_SAFE_INTEGER;
-  const bRank = bi >= 0 ? bi : Number.MAX_SAFE_INTEGER;
-  return aRank - bRank || a.localeCompare(b);
-}
-
-const PLUGIN_ROOT = resolvePluginPackageRoot(import.meta.url);
-const PLUGIN_PACKAGE_JSON = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf-8"));
-const PLUGIN_VERSION =
-  typeof PLUGIN_PACKAGE_JSON.version === "string" ? PLUGIN_PACKAGE_JSON.version.trim() : "0.0.0";
-/** npm folder name for skills path (always the plugin package). */
-const NPM_PACKAGE_NAME =
-  typeof PLUGIN_PACKAGE_JSON.name === "string" ? PLUGIN_PACKAGE_JSON.name : "solana-traderclaw";
-
-/** When installed via `npm i -g traderclaw-cli`, bin/ lives under traderclaw-cli — show that version for --version. */
-let CLI_VERSION = null;
-try {
-  const cliPkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "package.json");
-  const cliPkg = JSON.parse(readFileSync(cliPkgPath, "utf-8"));
-  if (cliPkg.name === "traderclaw-cli" && typeof cliPkg.version === "string") {
-    CLI_VERSION = cliPkg.version.trim();
-  }
-} catch {
-  /* git checkout: only plugin package.json next to bin */
-}
-
-/** User-facing CLI version (wrapper package when present, else plugin). */
-const VERSION = CLI_VERSION || PLUGIN_VERSION;
+const PACKAGE_JSON = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
+const VERSION = PACKAGE_JSON.version;
+const NPM_PACKAGE_NAME = typeof PACKAGE_JSON.name === "string" ? PACKAGE_JSON.name : "solana-traderclaw";
 const PLUGIN_ID = "solana-trader";
 const LEGACY_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1", "solana-traderclaw"];
 const CONFIG_DIR = join(homedir(), ".openclaw");
@@ -699,7 +638,6 @@ async function cmdSetup(args) {
   let writeGatewayEnvFlag = false;
   let noEnsureGatewayPersistent = false;
   let signupRecoverySecret = undefined;
-  let forwardTelegramRecipientArg = "";
 
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === "--api-key" || args[i] === "-k") && args[i + 1]) {
@@ -737,14 +675,6 @@ async function cmdSetup(args) {
     }
     if (args[i] === "--no-ensure-gateway-persistent") {
       noEnsureGatewayPersistent = true;
-    }
-    if (
-      (args[i] === "--telegram-recipient" ||
-        args[i] === "--forward-telegram-chat-id" ||
-        args[i] === "--telegram-chat-id") &&
-      args[i + 1]
-    ) {
-      forwardTelegramRecipientArg = args[++i];
     }
   }
   const runtimeWalletPrivateKey = getRuntimeWalletPrivateKey(walletPrivateKey);
@@ -1013,49 +943,6 @@ async function cmdSetup(args) {
     }
   }
 
-  let forwardTelegramRecipient = forwardTelegramRecipientArg.trim();
-  print("\nTelegram delivery (optional)...\n");
-  printInfo("  Enter your Telegram @username or numeric chat id so agent replies can be routed to you.");
-  printInfo(
-    "  Usernames resolve when plugin config telegramBotToken is set, or TELEGRAM_BOT_TOKEN / OPENCLAW_TELEGRAM_BOT_TOKEN is set for this prompt.",
-  );
-  printInfo("  Private chats: message your bot once first.\n");
-  if (!forwardTelegramRecipient) {
-    forwardTelegramRecipient = await prompt("Telegram @username or chat id (optional, Enter to skip)", "");
-  }
-  forwardTelegramRecipient = forwardTelegramRecipient.trim();
-
-  if (forwardTelegramRecipient) {
-    const botToken = String(
-      prevPlugin?.telegramBotToken ||
-        process.env.TELEGRAM_BOT_TOKEN ||
-        process.env.OPENCLAW_TELEGRAM_BOT_TOKEN ||
-        "",
-    ).trim();
-    try {
-      const { looksLikeTelegramChatId, resolveTelegramRecipientToChatId } = await import(
-        pathToFileURL(join(PLUGIN_ROOT, "dist", "src", "telegram-resolve.js")).href,
-      );
-      if (looksLikeTelegramChatId(forwardTelegramRecipient)) {
-        pluginConfig.forwardTelegramRecipient = forwardTelegramRecipient;
-        printSuccess(`  Saved Telegram chat id`);
-      } else if (botToken) {
-        const id = await resolveTelegramRecipientToChatId({ botToken, raw: forwardTelegramRecipient });
-        pluginConfig.forwardTelegramRecipient = id;
-        printSuccess(`  Resolved @${forwardTelegramRecipient.replace(/^@/, "")} → chat id ${id}`);
-      } else {
-        pluginConfig.forwardTelegramRecipient = forwardTelegramRecipient;
-        printInfo(
-          "  Saved as-is; set plugin telegramBotToken or gateway TELEGRAM_BOT_TOKEN to resolve @username on first run.",
-        );
-      }
-    } catch (err) {
-      printWarn(`  Telegram resolve failed: ${err instanceof Error ? err.message : String(err)}`);
-      printInfo("  Saving your username anyway — fix token or use numeric chat id.");
-      pluginConfig.forwardTelegramRecipient = forwardTelegramRecipient;
-    }
-  }
-
   print("\nWriting configuration...\n");
 
   const existingConfig = readConfig();
@@ -1264,7 +1151,6 @@ async function cmdSetup(args) {
   Wallet PrivKey:${lastSeenWalletPrivateKey ? (createdNewWallet || showWalletPrivateKey ? " " + lastSeenWalletPrivateKey : " " + maskKey(lastSeenWalletPrivateKey)) : " not saved"}
   Gateway URL:   ${gatewayBaseUrl || "not set"}
   Gateway Token: ${gatewayToken ? maskKey(gatewayToken) : "not set"}
-  Telegram fwd:  ${pluginConfig.forwardTelegramRecipient || "(not set)"}
   API Key:       ${showApiKey ? apiKey : maskKey(apiKey)}
   Session:       Active (tier: ${sessionTokens.session?.tier || "?"})
   Config:        ${CONFIG_FILE}
@@ -1878,7 +1764,7 @@ function parseJsonBody(req) {
   });
 }
 
-async function loadWizardLlmCatalogAsync() {
+function loadWizardLlmCatalog() {
   const supportedProviders = new Set([
     "anthropic",
     "openai",
@@ -1905,23 +1791,11 @@ async function loadWizardLlmCatalogAsync() {
     providers: [
       {
         id: "anthropic",
-        models: [
-          { id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6 (recommended default)" },
-          { id: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6" },
-          { id: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5" },
-        ],
+        models: [{ id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6 (recommended default)" }],
       },
       {
         id: "openai",
-        models: [
-          { id: "openai/gpt-5.4", name: "GPT-5.4 (recommended default)" },
-          { id: "openai/gpt-5.4-mini", name: "GPT-5.4 mini" },
-          { id: "openai/gpt-5.4-nano", name: "GPT-5.4 nano" },
-        ],
-      },
-      {
-        id: "openai-codex",
-        models: [{ id: "openai-codex/gpt-5-codex", name: "GPT-5 Codex" }],
+        models: [{ id: "openai/gpt-5.4", name: "GPT-5.4" }],
       },
       {
         id: "xai",
@@ -1947,22 +1821,6 @@ async function loadWizardLlmCatalogAsync() {
         id: "mistral",
         models: [{ id: "mistral/mistral-large-latest", name: "Mistral Large" }],
       },
-      {
-        id: "perplexity",
-        models: [{ id: "perplexity/sonar-pro", name: "Sonar Pro" }],
-      },
-      {
-        id: "together",
-        models: [{ id: "together/moonshotai/Kimi-K2.5", name: "Kimi K2.5" }],
-      },
-      {
-        id: "nvidia",
-        models: [{ id: "nvidia/llama-3.3-70b-instruct", name: "Llama 3.3 70B Instruct" }],
-      },
-      {
-        id: "qwen",
-        models: [{ id: "qwen/qwen3-235b-a22b", name: "Qwen3 235B A22B" }],
-      },
     ],
   };
 
@@ -1970,59 +1828,34 @@ async function loadWizardLlmCatalogAsync() {
     return { ...fallback, warning: "openclaw_not_found" };
   }
 
-  const providerIds = [...supportedProviders].sort(compareWizardProviderPriority);
-  const priorityProviderIds = providerIds.filter((id) => WIZARD_PRIORITY_PROVIDERS.includes(id));
-
-  async function fetchModelsForProvider(provider) {
-    try {
-      const { stdout } = await execFileAsync(
-        "openclaw",
-        ["models", "list", "--all", "--provider", provider, "--json"],
-        {
-          encoding: "utf-8",
-          maxBuffer: 25 * 1024 * 1024,
-          timeout: OPENCLAW_MODELS_PER_PROVIDER_TIMEOUT_MS,
-          env: NO_COLOR_ENV,
-        },
-      );
-      return { provider, stdout };
-    } catch (err) {
-      return { provider, error: err };
-    }
-  }
-
-  function seedFallbackProviderMap() {
-    return new Map(
-      fallback.providers.map((entry) => [
-        entry.id,
-        entry.models.map((model) => ({ ...model })),
-      ]),
-    );
-  }
-
-  function mergeCatalogModelsIntoMap(providerMap, models, expectedProvider = "") {
-    let added = 0;
+  try {
+    const raw = execSync("openclaw models list --all --json", {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: 30_000,
+      env: NO_COLOR_ENV,
+    });
+    const parsed = extractJson(raw);
+    if (!parsed) throw new Error(`Could not extract JSON from openclaw models list output (first 200 chars): ${stripAnsi(raw).slice(0, 200)}`);
+    const models = Array.isArray(parsed?.models) ? parsed.models : [];
+    const providerMap = new Map();
     for (const entry of models) {
       if (!entry || typeof entry.key !== "string") continue;
       const modelId = String(entry.key);
       const slash = modelId.indexOf("/");
       if (slash <= 0 || slash === modelId.length - 1) continue;
       const provider = modelId.slice(0, slash);
-      if (!supportedProviders.has(provider)) continue;
-      if (expectedProvider && provider !== expectedProvider) continue;
       const existing = providerMap.get(provider) || [];
       existing.push({
         id: modelId,
         name: typeof entry.name === "string" && entry.name.trim() ? entry.name : modelId,
       });
       providerMap.set(provider, existing);
-      added += 1;
     }
-    return added;
-  }
 
-  function buildProvidersFromMap(providerMap) {
-    return providerIds
+    const providers = [...providerMap.keys()]
+      .sort((a, b) => a.localeCompare(b))
       .map((id) => {
         const rawModels = providerMap.get(id) || [];
         const sortedIds = sortModelsByPreference(
@@ -2030,94 +1863,20 @@ async function loadWizardLlmCatalogAsync() {
           rawModels.map((m) => m.id),
         );
         const byId = new Map(rawModels.map((m) => [m.id, m]));
-        const limitedIds = sortedIds.slice(0, MAX_MODELS_PER_PROVIDER_SORT);
-        const models = limitedIds.map((mid) => byId.get(mid)).filter(Boolean);
+        const models = sortedIds.map((mid) => byId.get(mid)).filter(Boolean);
         return { id, models };
       })
       .filter((entry) => supportedProviders.has(entry.id))
       .filter((entry) => entry.models.length > 0);
-  }
 
-  /** When `openclaw models list --all --json` returns models; used if per-provider calls yield nothing. */
-  function mergeFlatCatalogIntoMap(providerMap) {
-    const raw = execSync("openclaw models list --all --json", {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 50 * 1024 * 1024,
-      timeout: OPENCLAW_MODELS_FLAT_TIMEOUT_MS,
-      env: NO_COLOR_ENV,
-    });
-    const parsed = extractJson(raw);
-    if (!parsed) return 0;
-    const models = Array.isArray(parsed?.models) ? parsed.models : [];
-    return mergeCatalogModelsIntoMap(providerMap, models);
-  }
-
-  try {
-    const t0 = Date.now();
-    const liveProviderMap = new Map();
-    let catalogStrategy = "flat_all";
-    let flatError = "";
-    let liveAdded = 0;
-    try {
-      liveAdded = mergeFlatCatalogIntoMap(liveProviderMap);
-    } catch (err) {
-      flatError = err instanceof Error ? err.message : String(err);
-    }
-
-    let batches = [];
-    if (liveAdded === 0) {
-      catalogStrategy = "priority_parallel";
-      batches = await Promise.all(priorityProviderIds.map((p) => fetchModelsForProvider(p)));
-      for (const batch of batches) {
-        if (batch.error || !batch.stdout) continue;
-        const parsed = extractJson(batch.stdout);
-        if (!parsed) continue;
-        const models = Array.isArray(parsed?.models) ? parsed.models : [];
-        liveAdded += mergeCatalogModelsIntoMap(liveProviderMap, models, batch.provider);
-      }
-    }
-
-    let providers = buildProvidersFromMap(liveProviderMap);
     if (providers.length === 0) {
-      const failedParallel = batches.filter((b) => b.error).length;
-      const details = [];
-      if (flatError) details.push(`flat list failed: ${flatError.slice(0, 160)}`);
-      if (failedParallel > 0) {
-        details.push(
-          `${failedParallel}/${priorityProviderIds.length} priority provider lookups failed`,
-        );
-      }
-      return {
-        ...fallback,
-        warning: `openclaw_model_catalog_unavailable${details.length ? ` (${details.join("; ")})` : ""}`,
-      };
+      return { ...fallback, warning: "openclaw_model_catalog_empty" };
     }
 
-    const mergedProviderMap = new Map(liveProviderMap);
-    for (const [provider, models] of seedFallbackProviderMap()) {
-      if (!mergedProviderMap.has(provider) || (mergedProviderMap.get(provider) || []).length === 0) {
-        mergedProviderMap.set(provider, models);
-      }
-    }
-    providers = buildProvidersFromMap(mergedProviderMap);
-
-    const elapsedMs = Date.now() - t0;
-    const source =
-      providers.length > buildProvidersFromMap(liveProviderMap).length ? "hybrid" : "openclaw";
-    const warning =
-      source === "hybrid" && flatError
-        ? `loaded priority providers; kept curated defaults for the rest (${flatError.slice(0, 160)})`
-        : source === "hybrid"
-          ? "loaded priority providers; kept curated defaults for the rest"
-          : "";
     return {
-      source,
+      source: "openclaw",
       providers,
       generatedAt: new Date().toISOString(),
-      catalogFetchMs: elapsedMs,
-      catalogStrategy,
-      ...(warning ? { warning } : {}),
     };
   } catch (err) {
     const detail = err?.message || String(err);
@@ -2421,7 +2180,7 @@ function wizardHtml(defaults) {
           const updateHint = () => {
             const elapsedSeconds = Math.max(1, Math.floor((Date.now() - llmLoadStartedAt) / 1000));
             if (elapsedSeconds >= 8) {
-              llmLoadingHintTextEl.textContent = "Still loading provider catalog (" + elapsedSeconds + "s). This should usually finish in under ~10s.";
+              llmLoadingHintTextEl.textContent = "Still loading provider catalog (" + elapsedSeconds + "s). First run can take up to ~20s.";
               return;
             }
             llmLoadingHintTextEl.textContent = "Fetching provider list (" + elapsedSeconds + "s)...";
@@ -2490,13 +2249,10 @@ function wizardHtml(defaults) {
           setSelectOptions(llmProviderEl, providers, "${defaults.llmProvider}");
           refreshModelOptions("${defaults.llmModel}");
           const isFallback = llmCatalog.source === "fallback";
-          const isHybrid = llmCatalog.source === "hybrid";
           const catalogMsg = isFallback
-            ? "Showing curated safe defaults only (could not load live OpenClaw catalog" + (llmCatalog.warning ? ": " + llmCatalog.warning : "") + "). Anthropic and OpenAI stay ready first, with several other providers still available."
-            : isHybrid
-              ? "Loaded priority providers first and filled the rest with curated defaults" + (llmCatalog.warning ? " (" + llmCatalog.warning + ")" : "") + "."
-              : "LLM providers loaded. Select provider and paste credential to continue. Model selection is optional.";
-          setLlmCatalogReady(true, catalogMsg, isFallback || isHybrid);
+            ? "Showing safe defaults only (could not load full OpenClaw catalog" + (llmCatalog.warning ? ": " + llmCatalog.warning : "") + "). These providers still work — pick one and paste your credential."
+            : "LLM providers loaded. Select provider and paste credential to continue. Model selection is optional.";
+          setLlmCatalogReady(true, catalogMsg, isFallback);
         } catch (err) {
           setLlmCatalogReady(false, "Failed to load LLM providers. Check OpenClaw and reload this page.", true);
           manualEl.textContent = "Failed to load LLM provider catalog: " + (err && err.message ? err.message : String(err));
@@ -2871,21 +2627,7 @@ async function cmdInstall(args) {
     }
 
     if (req.method === "GET" && req.url === "/api/llm/options") {
-      try {
-        if (!wizardLlmCatalogPromise) {
-          wizardLlmCatalogPromise = loadWizardLlmCatalogAsync().catch((err) => {
-            wizardLlmCatalogPromise = null;
-            throw err;
-          });
-        }
-        const payload = await wizardLlmCatalogPromise;
-        respondJson(200, payload);
-      } catch (err) {
-        respondJson(500, {
-          source: "error",
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
+      respondJson(200, loadWizardLlmCatalog());
       return;
     }
 
@@ -3303,7 +3045,6 @@ Setup options:
   --wallet-private-key  Optional base58 private key for wallet proof flow (runtime only, never saved)
   --gateway-base-url, -g  Gateway public HTTPS URL for orchestrator callbacks
   --gateway-token, -t     Gateway bearer token (defaults to API key)
-  --telegram-recipient    Telegram @username or chat id (aliases: --forward-telegram-chat-id, --telegram-chat-id)
   --skip-gateway-registration  Skip gateway URL registration with orchestrator
   --show-api-key     Extra hint after signup (full key is always shown once; confirm with API_KEY_STORED)
   --show-wallet-private-key  Reveal full wallet private key in setup output
@@ -3336,7 +3077,6 @@ Examples:
   traderclaw setup --signup --user-id my_agent_001
   traderclaw setup --api-key oc_xxx --url https://api.traderclaw.ai
   traderclaw setup --gateway-base-url https://gateway.myhost.ts.net
-  traderclaw setup --telegram-recipient @myusername
   traderclaw login
   traderclaw login --force-reauth --wallet-private-key <base58_key>
   traderclaw logout
@@ -3358,11 +3098,7 @@ async function main() {
   }
 
   if (command === "--version" || command === "-v") {
-    if (CLI_VERSION && PLUGIN_VERSION && CLI_VERSION !== PLUGIN_VERSION) {
-      print(`traderclaw v${CLI_VERSION} (plugin solana-traderclaw v${PLUGIN_VERSION})`);
-    } else {
-      print(`traderclaw v${VERSION}`);
-    }
+    print(`traderclaw v${VERSION}`);
     process.exit(0);
   }
 

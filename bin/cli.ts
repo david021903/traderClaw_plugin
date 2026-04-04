@@ -204,22 +204,12 @@ async function cmdSetup(args: string[]) {
   let apiKey = "";
   let orchestratorUrl = "";
 
-  let forwardTelegramRecipientArg = "";
-
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === "--api-key" || args[i] === "-k") && args[i + 1]) {
       apiKey = args[++i];
     }
     if ((args[i] === "--url" || args[i] === "-u") && args[i + 1]) {
       orchestratorUrl = args[++i];
-    }
-    if (
-      (args[i] === "--telegram-recipient" ||
-        args[i] === "--forward-telegram-chat-id" ||
-        args[i] === "--telegram-chat-id") &&
-      args[i + 1]
-    ) {
-      forwardTelegramRecipientArg = args[++i];
     }
   }
 
@@ -354,17 +344,6 @@ async function cmdSetup(args: string[]) {
     process.exit(1);
   }
 
-  print("\nTelegram delivery (optional)...\n");
-  printInfo("  Enter your Telegram @username or numeric chat id so agent replies can be routed to you.");
-  printInfo("  Usernames are resolved with Telegram getChat (set TELEGRAM_BOT_TOKEN on the gateway, or");
-  printInfo("  export it here for immediate resolution). Private chats: message your bot once first.\n");
-
-  let forwardTelegramRecipient = forwardTelegramRecipientArg.trim();
-  if (!forwardTelegramRecipient) {
-    forwardTelegramRecipient = await prompt("Telegram @username or chat id (optional, Enter to skip)", "");
-  }
-  forwardTelegramRecipient = forwardTelegramRecipient.trim();
-
   print("\nWriting configuration...\n");
 
   const existingConfig = readConfig();
@@ -374,32 +353,6 @@ async function cmdSetup(args: string[]) {
     apiKey,
     apiTimeout: 120000,
   };
-
-  if (forwardTelegramRecipient) {
-    try {
-      const { resolveTelegramRecipientToChatId, looksLikeTelegramChatId } = await import("../src/telegram-resolve.ts");
-      const botToken = String(
-        process.env.TELEGRAM_BOT_TOKEN || process.env.OPENCLAW_TELEGRAM_BOT_TOKEN || "",
-      ).trim();
-      if (looksLikeTelegramChatId(forwardTelegramRecipient)) {
-        pluginConfig.forwardTelegramRecipient = forwardTelegramRecipient;
-        printSuccess(`  Saved Telegram chat id`);
-      } else if (botToken) {
-        const id = await resolveTelegramRecipientToChatId({ botToken, raw: forwardTelegramRecipient });
-        pluginConfig.forwardTelegramRecipient = id;
-        printSuccess(`  Resolved @${forwardTelegramRecipient.replace(/^@/, "")} → chat id ${id}`);
-      } else {
-        pluginConfig.forwardTelegramRecipient = forwardTelegramRecipient;
-        printInfo(
-          "  Saved as-is; start the gateway with TELEGRAM_BOT_TOKEN set to resolve @username on first run.",
-        );
-      }
-    } catch (err) {
-      printWarn(`  Telegram resolve failed: ${err instanceof Error ? err.message : String(err)}`);
-      printInfo("  Saving your username anyway — fix token or use numeric chat id.");
-      pluginConfig.forwardTelegramRecipient = forwardTelegramRecipient;
-    }
-  }
   setPluginConfig(existingConfig, pluginConfig);
   writeConfig(existingConfig);
 
@@ -412,7 +365,6 @@ async function cmdSetup(args: string[]) {
   Orchestrator:  ${orchestratorUrl}
   Wallet:        ${walletLabel} (ID: ${walletId})
   API Key:       ${maskKey(apiKey)}
-  Telegram fwd:  ${(pluginConfig.forwardTelegramRecipient as string) || "(not set)"}
   Config:        ${CONFIG_FILE}
 `);
   print("Next steps:");
@@ -623,9 +575,8 @@ Commands:
   config             View and manage configuration
 
 Setup options:
-  --api-key, -k              API key (skip interactive prompt)
-  --url, -u                  Orchestrator URL (skip interactive prompt)
-  --telegram-recipient   Telegram @username or chat id (alias: --forward-telegram-chat-id)
+  --api-key, -k      API key (skip interactive prompt)
+  --url, -u          Orchestrator URL (skip interactive prompt)
 
 Config subcommands:
   config show        Show current configuration
@@ -635,7 +586,6 @@ Config subcommands:
 Examples:
   openclaw-trader setup
   openclaw-trader setup --api-key sk_live_abc123 --url https://api.traderclaw.ai
-  openclaw-trader setup --telegram-recipient @MyChannelOrUser
   openclaw-trader status
   openclaw-trader config show
   openclaw-trader config set apiTimeout 60000

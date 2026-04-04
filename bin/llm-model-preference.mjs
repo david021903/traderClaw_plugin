@@ -211,21 +211,14 @@ export function modelPreferenceScore(provider, modelId) {
   return score;
 }
 
-/** Cap list size after scoring so huge catalogs stay fast for sort + JSON payloads. */
-export const MAX_MODELS_PER_PROVIDER_SORT = 1500;
-
 /**
  * Best-first order for dropdowns and validation.
- * Uses a score cache because sort() may compare the same ids many times.
  */
 export function sortModelsByPreference(provider, modelIds) {
   const items = [...new Set((modelIds || []).filter(Boolean))];
-  const cache = new Map();
-  const score = (id) => {
-    if (!cache.has(id)) cache.set(id, modelPreferenceScore(provider, id));
-    return cache.get(id);
-  };
-  return items.sort((a, b) => score(b) - score(a) || String(a).localeCompare(String(b)));
+  return items.sort(
+    (a, b) => modelPreferenceScore(provider, b) - modelPreferenceScore(provider, a) || String(a).localeCompare(String(b)),
+  );
 }
 
 export function choosePreferredProviderModel(provider, models = []) {
