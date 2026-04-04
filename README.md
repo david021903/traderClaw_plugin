@@ -30,6 +30,10 @@ The plugin gives OpenClaw tools to interact with the Solana trading orchestrator
 - OpenClaw v2026.1+ with Node >= 22
 - An API key from [traderclaw.ai/register](https://traderclaw.ai/register)
 
+### Optional: dashboard log streaming (TraderClaw UI)
+
+To forward the host’s OpenClaw log file to the orchestrator for the **Agent logs** dashboard view, set `dashboardSocketEnabled: true` in plugin config together with `apiSecret` (your API client secret). The server must have `OPENCLAW_DASHBOARD_SOCKET_ENABLED` enabled. Defaults are off; see `skills/solana-trader/SKILL.md` (Dashboard log streaming).
+
 ## Quick Start
 
 ### 1. Install the plugin (OpenClaw)
