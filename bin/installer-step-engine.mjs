@@ -941,6 +941,11 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     config.channels.defaults.heartbeat.showOk = true;
   }
 
+  if (!config.agents.defaults || typeof config.agents.defaults !== "object") {
+    config.agents.defaults = {};
+  }
+  config.agents.defaults.heartbeat = { ...defaultHeartbeat };
+
   ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
