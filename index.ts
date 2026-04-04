@@ -70,6 +70,16 @@ interface PluginConfig {
   dailyLogRetentionDays?: number;
   xConfig?: XConfig;
   beta?: { xPosting?: boolean };
+  /**
+   * When true, tail the local OpenClaw log file and POST lines to the orchestrator dashboard ingest (Approach A).
+   * Requires `OPENCLAW_DASHBOARD_SOCKET_ENABLED` on the server, `apiSecret` in config, and a resolved apiKey after session init.
+   * Default false.
+   */
+  dashboardSocketEnabled?: boolean;
+  /** Path to OpenClaw log on disk (default `TRADERCLAW_OPENCLAW_LOG_PATH` or `/tmp/openclaw/openclaw.log`). */
+  dashboardLogPath?: string;
+  /** OpenClaw API secret for HMAC signing of `/api/dashboard/agent-log-lines` (same as client apiSecret from signup). */
+  apiSecret?: string;
 }
 
 function parseConfig(raw: unknown): PluginConfig {
@@ -107,6 +117,11 @@ function parseConfig(raw: unknown): PluginConfig {
     ? (obj.beta as Record<string, unknown>)
     : {};
   const beta = { xPosting: betaRaw.xPosting === true };
+  const rawDash = obj.dashboardSocketEnabled;
+  const dashboardSocketEnabled =
+    rawDash === true || rawDash === "true" || String(rawDash ?? "").toLowerCase() === "on";
+  const dashboardLogPath = typeof obj.dashboardLogPath === "string" ? obj.dashboardLogPath : undefined;
+  const apiSecret = typeof obj.apiSecret === "string" ? obj.apiSecret : undefined;
   return {
     orchestratorUrl,
     walletId,
@@ -129,6 +144,9 @@ function parseConfig(raw: unknown): PluginConfig {
     dailyLogRetentionDays,
     xConfig,
     beta,
+    dashboardSocketEnabled,
+    dashboardLogPath,
+    apiSecret,
   };
 }
 
@@ -3414,6 +3432,39 @@ const solanaTraderPlugin = {
           api.logger.info(`[solana-trader] Forward probe result: ${JSON.stringify(probe)}`);
         } catch (err) {
           api.logger.warn(`[solana-trader] Forward probe failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+
+        if (config.dashboardSocketEnabled) {
+          const secret =
+            typeof config.apiSecret === "string" && config.apiSecret.trim() ? config.apiSecret.trim() : undefined;
+          const hmacKey = sessionManager.getApiKey();
+          if (!secret || !hmacKey) {
+            api.logger.warn(
+              "[solana-trader] dashboardSocketEnabled requires apiSecret in plugin config and a resolved apiKey after session init — dashboard log forwarder not started",
+            );
+          } else {
+            const logPath =
+              (typeof config.dashboardLogPath === "string" && config.dashboardLogPath.trim()) ||
+              (typeof process.env.TRADERCLAW_OPENCLAW_LOG_PATH === "string"
+                ? process.env.TRADERCLAW_OPENCLAW_LOG_PATH.trim()
+                : "") ||
+              "/tmp/openclaw/openclaw.log";
+            import("./src/dashboard-log-forwarder.js")
+              .then(({ startDashboardLogForwarder }) => {
+                startDashboardLogForwarder({
+                  baseUrl: orchestratorUrl,
+                  apiKey: hmacKey,
+                  apiSecret: secret,
+                  logPath,
+                  logger: (msg: string) => api.logger.info(msg),
+                });
+              })
+              .catch((err: unknown) => {
+                api.logger.warn(
+                  `[solana-trader] dashboard log forwarder failed to load: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              });
+          }
         }
       },
     });
