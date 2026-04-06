@@ -2214,6 +2214,7 @@ function wizardHtml(defaults) {
       .spinner { width:14px; height:14px; border:2px solid #334a87; border-top-color:#8daeff; border-radius:50%; animation:spin 0.8s linear infinite; flex:0 0 auto; }
       .muted a { color:#9fd3ff; }
       .muted a:hover { color:#c5e5ff; }
+      .info-dot { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:50%; background:#22315a; color:#9cb0de; font-size:11px; font-weight:700; cursor:help; flex-shrink:0; }
       @keyframes spin { to { transform:rotate(360deg); } }
     </style>
   </head>
@@ -2290,6 +2291,13 @@ function wizardHtml(defaults) {
             <input id="apiKey" value="${defaults.apiKey}" placeholder="Leave blank if you are new — setup will create your account" />
             <p class="muted">Already have a TraderClaw account? Paste your API key here. New users: leave empty.</p>
           </div>
+        </div>
+        <div style="margin-top:12px;">
+          <label style="display:flex;align-items:center;gap:8px;">Referral code (optional)
+            <span class="info-dot" title="Included access: 24 hours for every new account. Add a valid referral code for an extra 24 hours. Refer others: when they complete at least one trade with the agent, you earn +8 hours per active referral. When your access window ends, you will need to stake or keep referring to continue.">i</span>
+          </label>
+          <input id="referralCode" type="text" maxlength="16" autocomplete="off" placeholder="e.g. ABCD1234" />
+          <p class="muted">If you have a friend’s code, enter it here. The setup command below will include it for <code>traderclaw setup</code>. If the server rejects the code, clear this field or fix it and copy the updated command — or run <code>traderclaw setup</code> again and enter a valid code or leave referral blank when prompted.</p>
         </div>
         <button id="start" disabled>Start Installation</button>
       </div>
@@ -2399,6 +2407,7 @@ function wizardHtml(defaults) {
       let llmLoadStartedAt = 0;
       let announcedTailscaleUrl = "";
       let announcedFunnelAdminUrl = "";
+      let lastReferralFailFingerprint = "";
       let pollTimer = null;
       let pollIntervalMs = 1200;
       let installLocked = false;
@@ -2593,6 +2602,7 @@ function wizardHtml(defaults) {
           llmCredential: llmCredentialEl.value.trim(),
           apiKey: document.getElementById("apiKey").value.trim(),
           telegramToken: document.getElementById("telegramToken").value.trim(),
+          referralCode: document.getElementById("referralCode").value.trim(),
           xConsumerKey: xConsumerKeyEl.value.trim(),
           xConsumerSecret: xConsumerSecretEl.value.trim(),
           xAccessTokenMain: xAccessTokenMainEl.value.trim(),
@@ -2754,9 +2764,30 @@ function wizardHtml(defaults) {
         }
 
         const errors = data.errors || [];
-        manualEl.textContent = errors.length > 0
+        let manualText = errors.length > 0
           ? errors.map((e) => "Step " + (e.stepId || "unknown") + ":\\n" + (e.error || "")).join("\\n\\n")
           : "";
+        const combinedErr = errors.map((e) => e.error || "").join("\\n");
+        if (
+          data.status === "failed"
+          && /REFERRAL_CODE_INVALID|Unknown referral code/i.test(combinedErr)
+        ) {
+          manualText +=
+            (manualText ? "\\n\\n" : "") +
+            "Referral code was rejected. Clear or fix the referral field above, then click Start Installation again.";
+          const fp = combinedErr.slice(0, 240);
+          if (fp && fp !== lastReferralFailFingerprint) {
+            lastReferralFailFingerprint = fp;
+            try {
+              window.alert(
+                "Referral code was not accepted. Update or clear the referral field, then click Start Installation again.",
+              );
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+        manualEl.textContent = manualText;
         stepsEl.innerHTML = "";
         steps.forEach((row) => {
           const tr = document.createElement("tr");
@@ -2976,6 +3007,7 @@ async function cmdInstall(args) {
         enableTelegram: true,
         telegramToken: body.telegramToken || defaults.telegramToken,
         autoInstallDeps: true,
+        referralCode: typeof body.referralCode === "string" ? body.referralCode.trim() : "",
         xConsumerKey: body.xConsumerKey ?? defaults.xConsumerKey,
         xConsumerSecret: body.xConsumerSecret ?? defaults.xConsumerSecret,
         xAccessTokenMain: body.xAccessTokenMain ?? defaults.xAccessTokenMain,
@@ -3011,6 +3043,7 @@ async function cmdInstall(args) {
           enableTelegram: true,
           telegramToken: body.telegramToken || defaults.telegramToken,
           autoInstallDeps: true,
+          referralCode: wizardOpts.referralCode,
           xConsumerKey: wizardOpts.xConsumerKey,
           xConsumerSecret: wizardOpts.xConsumerSecret,
           xAccessTokenMain: wizardOpts.xAccessTokenMain,
@@ -3349,6 +3382,7 @@ Setup options:
   --gateway-base-url, -g  Gateway public HTTPS URL for orchestrator callbacks
   --gateway-token, -t     Gateway bearer token (defaults to API key)
   --telegram-recipient    Telegram @username or chat id (aliases: --forward-telegram-chat-id, --telegram-chat-id)
+  --referral-code, -r   Optional referral code for new signups (extra trial time when valid)
   --skip-gateway-registration  Skip gateway URL registration with orchestrator
   --show-api-key     Extra hint after signup (full key is always shown once; confirm with API_KEY_STORED)
   --show-wallet-private-key  Reveal full wallet private key in setup output
@@ -3378,7 +3412,7 @@ Examples:
   traderclaw install --wizard
   traderclaw install --wizard --lane quick-local
   traderclaw gateway ensure-persistent
-  traderclaw setup --signup --user-id my_agent_001
+  traderclaw setup --signup --user-id my_agent_001 --referral-code ABCD1234
   traderclaw setup --api-key oc_xxx --url https://api.traderclaw.ai
   traderclaw setup --gateway-base-url https://gateway.myhost.ts.net
   traderclaw setup --telegram-recipient @myusername
