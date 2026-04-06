@@ -1303,7 +1303,12 @@ function resolveLlmModelSelection(provider, requestedModel) {
     return { model: chosen || availableModels[0], source: "provider_default", availableModels, warnings };
   }
 
-  warnings.push(`No discoverable model list found for provider '${provider}'. Falling back to '${fallbackModelForProvider(provider)}'.`);
+  warnings.push(
+    `[ALERT] No discoverable model list found for provider '${provider}'. ` +
+    `Auto-selecting hardcoded default '${fallbackModelForProvider(provider)}' — ` +
+    `this model will be billed to your API key. ` +
+    `To use a different model, after finishing setup, use openclaw config and set the model manually.`,
+  );
   return { model: fallbackModelForProvider(provider), source: "fallback_guess", availableModels, warnings };
 }
 
