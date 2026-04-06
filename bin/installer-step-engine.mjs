@@ -1503,6 +1503,7 @@ export class InstallerStepEngine {
       xAccessTokenCtoSecret: typeof options.xAccessTokenCtoSecret === "string" ? options.xAccessTokenCtoSecret : "",
       xAccessTokenIntern: typeof options.xAccessTokenIntern === "string" ? options.xAccessTokenIntern : "",
       xAccessTokenInternSecret: typeof options.xAccessTokenInternSecret === "string" ? options.xAccessTokenInternSecret : "",
+      referralCode: typeof options.referralCode === "string" ? options.referralCode.trim() : "",
     };
     this.hooks = {
       onStepEvent: typeof hooks.onStepEvent === "function" ? hooks.onStepEvent : () => {},
@@ -1786,6 +1787,11 @@ export class InstallerStepEngine {
     const gatewayBaseUrl = this.options.gatewayBaseUrl || this.state.detected.funnelUrl || "";
     if (this.options.lane === "event-driven" && gatewayBaseUrl) {
       args.push("--gateway-base-url", gatewayBaseUrl);
+    }
+
+    const ref = String(this.options.referralCode || "").trim();
+    if (ref) {
+      args.push("--referral-code", ref);
     }
 
     const command = [this.modeConfig.cliName, ...args].join(" ");
