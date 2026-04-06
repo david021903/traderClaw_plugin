@@ -707,6 +707,8 @@ async function cmdSetup(args) {
   let noEnsureGatewayPersistent = false;
   let signupRecoverySecret = undefined;
   let forwardTelegramRecipientArg = "";
+  let referralCodeArg = "";
+  let referralInvalidRetries = 0;
 
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === "--api-key" || args[i] === "-k") && args[i + 1]) {
@@ -753,6 +755,9 @@ async function cmdSetup(args) {
     ) {
       forwardTelegramRecipientArg = args[++i];
     }
+    if ((args[i] === "--referral-code" || args[i] === "-r") && args[i + 1]) {
+      referralCodeArg = args[++i];
+    }
   }
   const runtimeWalletPrivateKey = getRuntimeWalletPrivateKey(walletPrivateKey);
 
@@ -770,6 +775,16 @@ async function cmdSetup(args) {
     }
   }
 
+  if (doSignupFlow && !referralCodeArg) {
+    printInfo(
+      "\n  Optional: enter a referral code for bonus access time (24h extra when valid). Press Enter to skip.\n",
+    );
+    printInfo(
+      "  Benefits: extra trial time now; referring others later earns +8h per user who completes at least one trade with the agent.\n",
+    );
+    referralCodeArg = await prompt("Referral code (optional)", "");
+  }
+
   if (doSignupFlow) {
     print("\n  Signing up for a new account...\n");
     if (!externalUserId) {
@@ -778,7 +793,7 @@ async function cmdSetup(args) {
 
     for (let signupAttempt = 0; ; signupAttempt++) {
       try {
-        const signupResult = await doSignup(orchestratorUrl, externalUserId);
+        const signupResult = await doSignup(orchestratorUrl, externalUserId, referralCodeArg);
         apiKey = signupResult.apiKey;
         if (signupResult.recoverySecret) {
           signupRecoverySecret = signupResult.recoverySecret;
@@ -790,6 +805,22 @@ async function cmdSetup(args) {
         break;
       } catch (err) {
         const msg = err.message || String(err);
+        const apiCode = err.code;
+        const referralRejected =
+          apiCode === "REFERRAL_CODE_INVALID" ||
+          msg.includes("REFERRAL_CODE_INVALID") ||
+          msg.includes("Unknown referral code");
+        if (referralRejected) {
+          referralInvalidRetries += 1;
+          if (referralInvalidRetries > 30) {
+            printError("Too many invalid referral attempts. Aborting.");
+            process.exit(1);
+          }
+          printWarn("  That referral code was not accepted (unknown or invalid).");
+          printInfo("  Leave it blank or enter a different code, then try again.");
+          referralCodeArg = await prompt("Referral code (optional, leave empty to skip)", "");
+          continue;
+        }
         if (msg.includes("SIGNUP_ALREADY_COMPLETED") || msg.includes("409")) {
           printWarn(`  User "${externalUserId}" is already registered.`);
           if (signupAttempt >= 2) {
