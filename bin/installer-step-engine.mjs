@@ -1168,7 +1168,6 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     );
   }
 
-
   ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
