@@ -2,6 +2,7 @@ import { execFileSync, execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
+import * as os from "os";
 import { dirname, join } from "path";
 import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
 import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
@@ -212,7 +213,11 @@ const NO_COLOR_ENV = { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" };
  * The current OpenClaw approach (docs.openclaw.ai/channels/telegram):
  *   channels.telegram.botToken = "<token>"   → token source
  *   channels.telegram.enabled  = true        → enable the channel
- *   channels.telegram.dmPolicy = "pairing"   → safe default (user approves first DM)
+ *   channels.telegram.dmPolicy = "open"      → single-user wizard install: deliver DMs without pairing
+ *
+ * Note: "pairing" is safer for multi-tenant deployments but breaks the wizard onboarding flow
+ * (heartbeat fires before the user has paired, so the very first DM is dropped). Single-user
+ * wizard installs almost always want "open"; tighten later if needed.
  */
 function writeTelegramChannelConfig(botToken, configPath = CONFIG_FILE) {
   let config = {};
@@ -227,7 +232,7 @@ function writeTelegramChannelConfig(botToken, configPath = CONFIG_FILE) {
   config.channels.telegram.botToken = botToken;
   // Only set dmPolicy if not already configured (preserve existing policy on re-installs).
   if (!config.channels.telegram.dmPolicy) {
-    config.channels.telegram.dmPolicy = "pairing";
+    config.channels.telegram.dmPolicy = "open";
   }
   ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
@@ -863,12 +868,45 @@ function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
 }
 
 /**
+ * Resolve per-provider model strings used by managed cron jobs.
+ * Returns `{ heavy, light }`. `heavy` is the wizard-chosen model. `light` is a cheaper variant
+ * when the provider has one (Anthropic → Haiku); otherwise `light` falls back to `heavy`.
+ *
+ * This replaces the previous hardcoded `anthropic/claude-sonnet-4-20250514` and
+ * `anthropic/claude-haiku-4-5` cron models, which silently failed for Codex / OpenAI / etc.
+ * installs because the user never authenticated with Anthropic.
+ */
+function resolveCronModels(provider, model) {
+  const heavy = (typeof model === "string" && model.startsWith(`${provider}/`)) ? model : null;
+  if (provider === "anthropic") {
+    return {
+      heavy: heavy || "anthropic/claude-sonnet-4-6",
+      light: "anthropic/claude-haiku-4-5",
+    };
+  }
+  if (provider === "openai-codex") {
+    const m = heavy || "openai-codex/gpt-5.4";
+    return { heavy: m, light: m };
+  }
+  if (provider === "openai") {
+    const m = heavy || "openai/gpt-5.4";
+    return { heavy: m, light: m };
+  }
+  // Generic fallback: same model for both tiers (configured provider determines the model string).
+  const fallback = heavy || `${provider}/default`;
+  return { heavy: fallback, light: fallback };
+}
+
+/**
  * Managed cron jobs with prescriptive tool chains (VPS report 2026-03-24).
  * Schedules are staggered (minutes :00 / :15 / :30 / :45) where possible to avoid pile-ups.
  * @param {string} agentId
+ * @param {{ heavy: string, light: string }} models
  * @returns {Array<{ id: string, schedule: string, agentId: string, message: string, enabled: boolean }>}
  */
-function traderCronPrescriptiveJobs(agentId) {
+function traderCronPrescriptiveJobs(agentId, models = { heavy: "anthropic/claude-sonnet-4-6", light: "anthropic/claude-haiku-4-5" }) {
+  const HEAVY = models.heavy;
+  const LIGHT = models.light;
   return [
     {
       id: "alpha-scan",
@@ -876,7 +914,7 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: alpha_scan\n\nScan new launches, filter, score, log alpha. Tools: solana_scan_launches → filter (vol>30K, mcap>10K, liq>5K) → solana_token_snapshot for survivors → quality filter (top10 <50%, deployer <3 abandoned, has social) → score 0-100 → solana_alpha_log for 65+. Summarize results.",
-      model: "anthropic/claude-sonnet-4-20250514",
+      model: HEAVY,
       thinking: false,
       lightContext: true,
       delivery: { mode: "announce", channel: "last", bestEffort: true },
@@ -888,7 +926,7 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: portfolio_health\n\nCombined dead-money + whale + risk audit. solana_capital_status + solana_positions → solana_token_snapshot per position → dead money exit (loss>40% or 90min+down+low vol) → whale flags (>5% supply moves) → risk checks (concentration/drawdown/exposure) → sell if CRITICAL → solana_memory_write tag 'portfolio_health'.",
-      model: "anthropic/claude-sonnet-4-20250514",
+      model: HEAVY,
       thinking: false,
       lightContext: true,
       delivery: { mode: "announce", channel: "last", bestEffort: true },
@@ -900,7 +938,7 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: trust_refresh\n\nCombined source + deployer trust. solana_source_trust_refresh + solana_deployer_trust_refresh → solana_alpha_sources + solana_trades for win rates → solana_source_trust_get + solana_deployer_trust_get, flag <30 → solana_memory_write tag 'trust_refresh'.",
-      model: "anthropic/claude-haiku-4-5",
+      model: LIGHT,
       thinking: false,
       lightContext: true,
       delivery: { mode: "none" },
@@ -912,7 +950,7 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: meta_rotation_analysis\n\nx_search_tweets trending topics → solana_scan_launches → categorize by narrative cluster → per-cluster metrics → compare vs solana_memory_search tag 'meta_rotation' → declare hot/fading clusters → solana_memory_write tag 'meta_rotation'.",
-      model: "anthropic/claude-sonnet-4-20250514",
+      model: HEAVY,
       thinking: false,
       lightContext: true,
       delivery: { mode: "announce", channel: "last", bestEffort: true },
@@ -924,7 +962,7 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: strategy_evolution\n\nDaily strategy review. solana_journal_summary — if <10 closed trades since last evolution, log 'insufficient data' and stop. Otherwise: solana_trades to bucket by confidence tier → solana_strategy_state for current weights → analyze tier performance → solana_strategy_update with conservative adjustments (max 10% per weight per cycle) → solana_memory_write tag 'strategy_evolution'.",
-      model: "anthropic/claude-sonnet-4-20250514",
+      model: HEAVY,
       thinking: true,
       lightContext: false,
       delivery: { mode: "announce", channel: "last", bestEffort: true },
@@ -936,7 +974,7 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: subscription_cleanup\n\nsolana_positions for open CAs → solana_bitquery_subscriptions for active subs (if AUTH_SCOPE_MISSING, log and stop) → match subs to positions → solana_bitquery_unsubscribe orphaned subs → solana_memory_write tag 'subscription_cleanup'. Summarize before/after counts.",
-      model: "anthropic/claude-haiku-4-5",
+      model: LIGHT,
       thinking: false,
       lightContext: true,
       delivery: { mode: "announce", channel: "last", bestEffort: true },
@@ -948,7 +986,7 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: daily_performance_report\n\nCompile 24h report. solana_journal_summary + solana_capital_status + solana_positions + solana_trades + solana_strategy_state → sections: Portfolio Summary, Trading Activity (count/win rate/PnL), Best/Worst Trades, Strategy State, Risk Metrics, Recommendations → solana_memory_write tag 'daily_report'. Deliver full report.",
-      model: "anthropic/claude-sonnet-4-20250514",
+      model: HEAVY,
       thinking: false,
       lightContext: false,
       delivery: { mode: "announce", channel: "telegram" },
@@ -960,7 +998,7 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: intelligence_lab_eval\n\nsolana_candidate_get — if <20 labeled candidates, log 'insufficient data' and exit. Otherwise: solana_evaluation_report → solana_model_registry for challengers → solana_replay_eval if challenger exists → solana_model_promote if challenger beats champion by >5% F1 → solana_memory_write tag 'intelligence_lab'.",
-      model: "anthropic/claude-sonnet-4-20250514",
+      model: HEAVY,
       thinking: true,
       lightContext: false,
       delivery: { mode: "none" },
@@ -972,7 +1010,7 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: memory_trim\n\nsolana_memory_trim dryRun:true first → review → solana_memory_trim retentionDays:2 → solana_memory_write tag 'memory_trim' with summary.",
-      model: "anthropic/claude-haiku-4-5",
+      model: LIGHT,
       thinking: false,
       lightContext: true,
       delivery: { mode: "none" },
@@ -984,7 +1022,7 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "Balance watchdog. 1) solana_capital_status 2) solana_positions 3) solana_context_snapshot_read 4) Compare real vs believed. If mismatch: solana_context_snapshot_write with corrected state, summarize changes. If match: reply WATCHDOG_OK.",
-      model: "anthropic/claude-haiku-4-5",
+      model: LIGHT,
       thinking: false,
       lightContext: true,
       delivery: { mode: "announce", channel: "telegram" },
@@ -993,7 +1031,7 @@ function traderCronPrescriptiveJobs(agentId) {
   ];
 }
 
-function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
+function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE, options = {}) {
   let config = {};
   try {
     config = JSON.parse(readFileSync(configPath, "utf-8"));
@@ -1011,9 +1049,12 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   /** Default periodic wake interval for TraderClaw installs (was 5m; stretched to reduce load). */
   const defaultHeartbeatEvery = "30m";
 
+  // target: "last" routes to the last channel that DM'd the agent (works as soon as the user
+  // sends any message in Telegram). "telegram" requires per-channel default routing setup
+  // and silently drops on first install — see VPS post-mortem.
   const defaultHeartbeat = {
     every: defaultHeartbeatEvery,
-    target: "telegram",
+    target: "last",
     isolatedSession: true,
     lightContext: true,
     prompt: heartbeatPrompt,
@@ -1043,7 +1084,18 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     if (existingIds.has(agent.id)) {
       const existing = config.agents.list.find(a => a.id === agent.id);
       if (agent.heartbeat) {
-        existing.heartbeat = agent.heartbeat;
+        // Idempotent reinstall: never clobber an existing user-customized heartbeat block.
+        // Only seed defaults that are missing — preserve any per-key overrides the operator
+        // wrote between installs (cadence, tone, target=@username, etc.).
+        if (!existing.heartbeat || typeof existing.heartbeat !== "object") {
+          existing.heartbeat = { ...agent.heartbeat };
+        } else {
+          for (const [k, v] of Object.entries(agent.heartbeat)) {
+            if (existing.heartbeat[k] === undefined || existing.heartbeat[k] === null || existing.heartbeat[k] === "") {
+              existing.heartbeat[k] = v;
+            }
+          }
+        }
       }
       if (agent.default) {
         existing.default = true;
@@ -1066,7 +1118,11 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   const mainAgent = isV2 ? "cto" : "main";
 
   /** Six prescriptive managed jobs (VPS report); v2 assigns the same set to the CTO agent. */
-  const targetJobs = traderCronPrescriptiveJobs(mainAgent);
+  const cronModels = resolveCronModels(
+    String(options?.llmProvider || "anthropic").trim(),
+    String(options?.llmModel || "").trim(),
+  );
+  const targetJobs = traderCronPrescriptiveJobs(mainAgent, cronModels);
 
   let removedLegacyCronJobs = false;
   if (config.cron && Object.prototype.hasOwnProperty.call(config.cron, "jobs")) {
@@ -1188,6 +1244,223 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     hooksConfigured: config.hooks.mappings.length,
     isV2,
   };
+}
+
+/**
+ * Persist the optional Telegram forward recipient onto the plugin entry config so the
+ * orchestrator's reply-forward path works on first install. Idempotent — does nothing
+ * when no recipient is provided. Accepts numeric chat ids (e.g. "818973873") or
+ * @username (e.g. "@neabi").
+ */
+function writeForwardTelegramRecipient(modeConfig, recipient, configPath = CONFIG_FILE) {
+  if (typeof recipient !== "string" || !recipient.trim()) return { written: false };
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    config = {};
+  }
+  if (!config.plugins || typeof config.plugins !== "object") config.plugins = {};
+  if (!config.plugins.entries || typeof config.plugins.entries !== "object") config.plugins.entries = {};
+  normalizeTraderPluginEntries(config, modeConfig.pluginId);
+  const entry = config.plugins.entries[modeConfig.pluginId];
+  if (!entry || typeof entry !== "object") return { written: false };
+  if (!entry.config || typeof entry.config !== "object") entry.config = {};
+  entry.config.forwardTelegramRecipient = recipient.trim();
+  ensureAgentsDefaultsSchemaCompat(config);
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  return { written: true, recipient: entry.config.forwardTelegramRecipient };
+}
+
+/**
+ * Approve any pending OpenClaw-paired devices on this host. Newly-paired devices
+ * land with only `operator.read` scope; new beta plugin RPCs need `operator.write` +
+ * `approvals` + `secrets`, so without approval the CLI loops on `1008 pairing required`.
+ *
+ * Best-effort: tolerates missing `openclaw devices` subcommand and an empty pending list.
+ * Returns counts but never throws — callers wrap in try/catch.
+ */
+async function approvePendingDevices() {
+  if (!commandExists("openclaw")) return { ran: false, reason: "no_cli" };
+  let listOut = "";
+  try {
+    listOut = execFileSync("openclaw", ["devices", "list", "--json"], {
+      encoding: "utf-8",
+      timeout: 15_000,
+      env: NO_COLOR_ENV,
+    }).trim();
+  } catch (err) {
+    return { ran: false, reason: "list_failed", error: err?.message || String(err) };
+  }
+  if (!listOut) return { ran: true, approved: 0, total: 0 };
+
+  let parsed;
+  try {
+    parsed = JSON.parse(listOut);
+  } catch {
+    return { ran: true, approved: 0, total: 0, reason: "list_not_json" };
+  }
+  const devices = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.devices) ? parsed.devices : [];
+
+  // Devices needing operator action: pending pair, awaiting approval, or flagged for repair
+  // (repair is what existing devices get when new RPC scopes are introduced — see VPS post-mortem).
+  const PENDING_STATES = new Set(["pending", "awaiting_approval", "needs_approval", "repair", "scope_repair"]);
+  const allCandidates = devices.filter(
+    (d) => d && typeof d === "object" && (PENDING_STATES.has(String(d.status || "").toLowerCase()) || d.requiresApproval === true),
+  );
+
+  // Authorization-scope safety: only auto-approve devices that we can prove belong to
+  // this host. Approving unrelated pending devices would silently grant the new
+  // operator.write/approvals/secrets scopes to someone else's machine. Match strategies:
+  //   1) device.hostname / device.host equals os.hostname()
+  //   2) device.deviceId / device.fingerprint equals a fingerprint we just paired (env)
+  //   3) operator opted in to broad approval via TRADERCLAW_INSTALLER_APPROVE_ALL_PENDING=1
+  // If none match and there is more than one pending device, do nothing and surface a
+  // log line so the operator can run `openclaw devices approve <id>` themselves.
+  const myHost = String(os.hostname() || "").toLowerCase();
+  const justPairedId = String(process.env.OPENCLAW_JUST_PAIRED_DEVICE_ID || "").trim();
+  const optInBroad = process.env.TRADERCLAW_INSTALLER_APPROVE_ALL_PENDING === "1";
+
+  const matchesThisHost = (d) => {
+    const dh = String(d.hostname || d.host || "").toLowerCase();
+    const did = String(d.id || d.deviceId || d.fingerprint || "").trim();
+    if (myHost && dh && dh === myHost) return true;
+    if (justPairedId && did && did === justPairedId) return true;
+    return false;
+  };
+
+  let candidates = allCandidates.filter(matchesThisHost);
+  // Conservative fallback: if exactly one pending candidate exists overall and no host
+  // metadata is available to disambiguate, treat it as "the device we just paired".
+  if (candidates.length === 0 && allCandidates.length === 1) {
+    candidates = allCandidates;
+  }
+  if (optInBroad) {
+    candidates = allCandidates;
+  }
+
+  if (candidates.length === 0 && allCandidates.length > 1) {
+    return {
+      ran: true,
+      approved: 0,
+      total: devices.length,
+      candidates: 0,
+      pending: allCandidates.length,
+      reason: "ambiguous_pending_devices",
+      pendingIds: allCandidates.map((d) => String(d.id || d.deviceId || "")).filter(Boolean),
+    };
+  }
+
+  let approved = 0;
+  const errors = [];
+  for (const d of candidates) {
+    const id = String(d.id || d.deviceId || "").trim();
+    if (!id) continue;
+    try {
+      execFileSync("openclaw", ["devices", "approve", id], {
+        encoding: "utf-8",
+        timeout: 15_000,
+        env: NO_COLOR_ENV,
+      });
+      approved += 1;
+    } catch (err) {
+      errors.push({ id, error: err?.message || String(err) });
+    }
+  }
+  return { ran: true, approved, total: devices.length, candidates: candidates.length, errors };
+}
+
+/**
+ * Final invariant check before declaring install complete. Re-reads openclaw.json from
+ * disk and verifies every default that the install promised to ship correctly. Throws
+ * (failing the wizard) on any mismatch so a broken config never ships to a fresh user.
+ */
+function runFreshInstallSmokeCheck(modeConfig, options, configPath = CONFIG_FILE) {
+  const issues = [];
+  let config;
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch (err) {
+    return { ok: false, issues: [`Could not read ${configPath}: ${err?.message || String(err)}`] };
+  }
+
+  // 1. Telegram dmPolicy must be "open" (only relevant when telegram was enabled)
+  if (options?.enableTelegram === true) {
+    const dmPolicy = config?.channels?.telegram?.dmPolicy;
+    if (dmPolicy !== "open") {
+      issues.push(`channels.telegram.dmPolicy is '${dmPolicy ?? "unset"}' (expected 'open' for wizard installs).`);
+    }
+  }
+
+  // 2. Every agent's heartbeat.target must be set to *something* routable. The fresh-install
+  // default is "last", but a reinstall over a config where the operator intentionally chose
+  // "@username" or "telegram:<id>" must NOT fail — configureGatewayScheduling preserves
+  // those values, so failing here would block legitimate reinstalls. Only fail when the
+  // agent has heartbeat config but no target at all (the regression we kept hitting).
+  const agents = Array.isArray(config?.agents?.list) ? config.agents.list : [];
+  for (const a of agents) {
+    if (!a?.heartbeat) continue;
+    const t = a.heartbeat.target;
+    if (!t) {
+      issues.push(`agents.list[id=${a.id}].heartbeat is configured but heartbeat.target is missing (expected 'last' or a routable target like '@username' / 'telegram:<id>').`);
+    }
+  }
+
+  // 3. Every X profile must have userId+username (only when X consumer keys are configured)
+  const entry = config?.plugins?.entries?.[modeConfig.pluginId];
+  const xCfg = entry?.config?.x;
+  if (xCfg && xCfg.consumerKey && xCfg.consumerSecret && xCfg.profiles && typeof xCfg.profiles === "object") {
+    for (const [pid, p] of Object.entries(xCfg.profiles)) {
+      if (!p || typeof p !== "object") continue;
+      if (!p.accessToken || !p.accessTokenSecret) continue;
+      if (!p.userId || !p.username) {
+        issues.push(`plugins.entries.${modeConfig.pluginId}.config.x.profiles.${pid} missing userId or username (x_read_mentions will fail).`);
+      }
+    }
+  }
+
+  // 4. Every cron job's model must match the wizard provider
+  const wantProvider = String(options?.llmProvider || "").trim();
+  if (wantProvider) {
+    let cronStorePath = "";
+    try {
+      cronStorePath = resolveCronJobsStorePath(config);
+    } catch {
+      cronStorePath = "";
+    }
+    if (cronStorePath && existsSync(cronStorePath)) {
+      let store = null;
+      try {
+        store = JSON.parse(readFileSync(cronStorePath, "utf-8"));
+      } catch (err) {
+        issues.push(`cron store '${cronStorePath}' could not be parsed: ${err?.message || String(err)} — provider/model alignment cannot be verified.`);
+      }
+      if (store) {
+        // Only enforce provider alignment on installer-managed TraderClaw jobs. Custom
+        // jobs the operator added between installs (or other plugins' jobs) are intentionally
+        // preserved by mergeTraderCronJobsIntoStore and must not fail the smoke check.
+        const managedIds = new Set([
+          ...traderCronPrescriptiveJobs("main").map((j) => j.id),
+          ...traderCronPrescriptiveJobs("cto").map((j) => j.id),
+        ].filter(Boolean));
+        const jobs = Array.isArray(store?.jobs) ? store.jobs : [];
+        for (const j of jobs) {
+          if (!j || typeof j !== "object") continue;
+          if (!managedIds.has(j.id)) continue;
+          // OpenClaw cron store nests model under job.payload.model (see buildOpenClawCronStoreJob).
+          // Fall back to top-level j.model only as a defensive read in case the schema changes.
+          const m = String(j?.payload?.model || j?.model || "");
+          if (!m) continue;
+          if (!m.startsWith(`${wantProvider}/`)) {
+            issues.push(`installer-managed cron job '${j.id}' has model '${m}' but wizard provider is '${wantProvider}'.`);
+          }
+        }
+      }
+    }
+  }
+
+  return { ok: issues.length === 0, issues, configPath };
 }
 
 function ensureOpenResponsesEnabled(configPath = CONFIG_FILE) {
@@ -1353,19 +1626,40 @@ function seedXConfig(modeConfig, configPath = CONFIG_FILE, wizardOpts = {}) {
     entry.config.x.profiles = {};
   }
 
-  const agentIds =
+  // V1 historically only seeded { main, solana-trader }. Production traffic resolves the X
+  // profile via callerAgentId || requestedAgentId || fallbackAgentId || "cto" — so a missing
+  // "cto" profile (the literal string-fallback) breaks x_read_mentions for any caller that
+  // doesn't explicitly pass agentId. Always seed "cto" for V1 too, mirroring "main" tokens
+  // when no dedicated cto credentials were supplied.
+  // Additionally, mirror under any agents.list[].identity.name (e.g. "AgentZERO") so any
+  // identity-name-based resolution path lands on a real profile.
+  const baseAgentIds =
     modeConfig.pluginId === "solana-trader-v2"
       ? ["cto", "intern"]
       : modeConfig.pluginId === "solana-trader"
-        ? ["main", "solana-trader"]
+        ? ["main", "solana-trader", "cto"]
         : ["main"];
+
+  const identityNames = new Set();
+  if (Array.isArray(config?.agents?.list)) {
+    for (const a of config.agents.list) {
+      const n = typeof a?.identity?.name === "string" ? a.identity.name.trim() : "";
+      if (n && !baseAgentIds.includes(n)) identityNames.add(n);
+    }
+  }
+  const agentIds = [...baseAgentIds, ...identityNames];
+
   let profilesFound = 0;
 
   for (const agentId of agentIds) {
     let { at, ats } = getAccessPairForAgent(wizardOpts, agentId);
+    // Mirror "main" tokens for any V1 secondary slot (solana-trader, cto, AgentZERO, …)
+    // when no dedicated tokens were supplied. Production X tools are stateless w.r.t.
+    // which token issued the call, so reusing "main" tokens across profiles is safe and
+    // matches what the user manually does on every install.
     if (
       modeConfig.pluginId === "solana-trader"
-      && agentId === "solana-trader"
+      && agentId !== "main"
       && (!at || !ats)
     ) {
       ({ at, ats } = getAccessPairForAgent(wizardOpts, "main"));
@@ -1915,6 +2209,13 @@ export class InstallerStepEngine {
       gatewayToken: options.gatewayToken || "",
       enableTelegram: options.enableTelegram === true,
       telegramToken: options.telegramToken || "",
+      // Optional: numeric chat id or @username the orchestrator forwards Telegram replies to.
+      // When set, written to plugins.entries[<pluginId>].config.forwardTelegramRecipient so the
+      // forward path works on first install without a manual edit. Legacy alias accepted.
+      forwardTelegramRecipient:
+        typeof options.forwardTelegramRecipient === "string" ? options.forwardTelegramRecipient.trim()
+        : typeof options.forwardTelegramChatId === "string" ? options.forwardTelegramChatId.trim()
+        : "",
       autoInstallDeps: options.autoInstallDeps !== false,
       skipPreflight: options.skipPreflight === true,
       skipInstallOpenClaw: options.skipInstallOpenClaw === true,
@@ -2161,6 +2462,17 @@ export class InstallerStepEngine {
     // bot token directly to openclaw.json — see docs.openclaw.ai/channels/telegram.
     writeTelegramChannelConfig(this.options.telegramToken, CONFIG_FILE);
     this.emitLog("telegram_required", "info", "Telegram bot token written to openclaw.json (channels.telegram.botToken).");
+
+    if (this.options.forwardTelegramRecipient) {
+      const fwd = writeForwardTelegramRecipient(this.modeConfig, this.options.forwardTelegramRecipient, CONFIG_FILE);
+      if (fwd.written) {
+        this.emitLog(
+          "telegram_required",
+          "info",
+          `Forward recipient written to plugins.entries.${this.modeConfig.pluginId}.config.forwardTelegramRecipient = ${fwd.recipient}.`,
+        );
+      }
+    }
 
     const policy = ensureTelegramGroupPolicyOpenForWizard();
     if (policy.changed) {
@@ -2450,6 +2762,33 @@ export class InstallerStepEngine {
             runPrivileged: (cmd, args) => this.runWithPrivilegeGuidance("gateway_persistence", cmd, args),
           });
         });
+
+        // Best-effort: approve the device that was just paired by the wizard so the new
+        // beta-RPC scopes (operator.write/approvals/secrets) are granted before the user
+        // hits a tool. Tolerates missing CLI subcommands; never fails the install.
+        await this.runStep("device_approval", "Approving freshly paired device", async () => {
+          try {
+            const result = await approvePendingDevices();
+            if (!result.ran) {
+              this.emitLog("device_approval", "info", `Skipped (${result.reason || "unknown"}). Approve manually with 'openclaw devices approve <id>' if RPC calls return 1008.`);
+              return { skipped: true, reason: result.reason };
+            }
+            if (result.approved > 0) {
+              this.emitLog("device_approval", "info", `Approved ${result.approved}/${result.candidates ?? result.approved} pending device(s) (of ${result.total} total).`);
+            } else {
+              this.emitLog("device_approval", "info", `No devices required approval (${result.total} total).`);
+            }
+            if (Array.isArray(result.errors) && result.errors.length > 0) {
+              for (const e of result.errors) {
+                this.emitLog("device_approval", "warn", `Could not approve device ${e.id}: ${e.error}`);
+              }
+            }
+            return result;
+          } catch (err) {
+            this.emitLog("device_approval", "warn", `Device approval skipped: ${err?.message || String(err)}. Approve manually with 'openclaw devices approve <id>' if RPC calls return 1008.`);
+            return { skipped: true, error: err?.message || String(err) };
+          }
+        });
       }
 
       await this.runStep("enable_responses", "Enabling /v1/responses endpoint", async () => {
@@ -2459,7 +2798,7 @@ export class InstallerStepEngine {
       });
 
       await this.runStep("gateway_scheduling", "Configuring heartbeat and cron schedules", async () => {
-        const result = configureGatewayScheduling(this.modeConfig, CONFIG_FILE);
+        const result = configureGatewayScheduling(this.modeConfig, CONFIG_FILE, this.options);
         this.emitLog("gateway_scheduling", "info", `Agents configured: ${result.agentsConfigured}`);
         if (result.cronJobsStoreWriteOk) {
           this.emitLog(
@@ -2537,23 +2876,71 @@ export class InstallerStepEngine {
           this.emitLog("x_credentials", "warn", `Missing X profiles for: ${missing.join(", ")}. Set tokens in the wizard or X_ACCESS_TOKEN_<AGENT_ID> / X_ACCESS_TOKEN_<AGENT_ID>_SECRET env vars.`);
         }
         const { consumerKey, consumerSecret } = getConsumerKeysFromWizard(this.options);
+        // Group agentIds by unique (accessToken, accessTokenSecret) pair so we only call
+        // GET /2/users/me once per real X account, then apply the resolved userId+username
+        // to every profile that uses that token pair. Previously the loop verified per-agent
+        // and silently skipped persisting userId on profiles whose verify call had transient
+        // failures — leaving x_read_mentions broken on those agents.
+        const pairGroups = new Map();
+        const pairOwner = new Map();
+        const isV1 = this.modeConfig.pluginId === "solana-trader";
+        for (const agentId of result.agentIds) {
+          let { at, ats } = getAccessPairForAgent(this.options, agentId);
+          // Mirror seedXConfig fallback: V1 secondary slots reuse main's tokens when no
+          // dedicated pair was supplied. Without this, mirrored profiles (cto / solana-trader /
+          // identity-name agents) get seeded with main tokens but skipped here, leaving their
+          // userId/username unpopulated and breaking x_read_mentions on those agents.
+          if (isV1 && agentId !== "main" && (!at || !ats)) {
+            ({ at, ats } = getAccessPairForAgent(this.options, "main"));
+          }
+          if (!at || !ats) continue;
+          const key = `${at}::${ats}`;
+          if (!pairGroups.has(key)) {
+            pairGroups.set(key, { at, ats, agentIds: [] });
+            pairOwner.set(key, agentId);
+          }
+          pairGroups.get(key).agentIds.push(agentId);
+        }
+
         const verified = [];
         const identitiesToPersist = [];
-        for (const agentId of result.agentIds) {
-          const { at, ats } = getAccessPairForAgent(this.options, agentId);
-          if (at && ats) {
+        for (const [key, group] of pairGroups) {
+          const owner = pairOwner.get(key);
+          let check = null;
+          let lastErr = null;
+          for (let attempt = 1; attempt <= 2; attempt++) {
             try {
-              const check = await verifyXCredentials(consumerKey, consumerSecret, at, ats);
-              if (check.ok) {
-                this.emitLog("x_credentials", "info", `Verified X profile '${agentId}': @${check.username} (${check.userId})`);
-                verified.push({ agentId, username: check.username, userId: check.userId });
-                identitiesToPersist.push({ agentId, userId: check.userId, username: check.username });
-              } else {
-                this.emitLog("x_credentials", "warn", `X credential verification failed for '${agentId}': HTTP ${check.status}`);
+              check = await verifyXCredentials(consumerKey, consumerSecret, group.at, group.ats);
+              if (check.ok) break;
+              lastErr = `HTTP ${check.status}`;
+              if (attempt < 2) {
+                this.emitLog("x_credentials", "warn", `Verify failed for token-pair owner '${owner}' (HTTP ${check.status}); retrying once.`);
+                await new Promise(r => setTimeout(r, 1500));
               }
             } catch (err) {
-              this.emitLog("x_credentials", "warn", `X credential verification error for '${agentId}': ${err?.message || String(err)}`);
+              lastErr = err?.message || String(err);
+              if (attempt < 2) {
+                this.emitLog("x_credentials", "warn", `Verify error for token-pair owner '${owner}' (${lastErr}); retrying once.`);
+                await new Promise(r => setTimeout(r, 1500));
+              }
             }
+          }
+          if (check && check.ok && check.userId && check.username) {
+            this.emitLog(
+              "x_credentials",
+              "info",
+              `Verified X token-pair (owner '${owner}'): @${check.username} (${check.userId}) → applying to ${group.agentIds.length} profile(s): ${group.agentIds.join(", ")}`,
+            );
+            for (const agentId of group.agentIds) {
+              verified.push({ agentId, username: check.username, userId: check.userId });
+              identitiesToPersist.push({ agentId, userId: check.userId, username: check.username });
+            }
+          } else {
+            this.emitLog(
+              "x_credentials",
+              "warn",
+              `X credential verification failed after retry for token-pair owner '${owner}' (${lastErr}). Profiles ${group.agentIds.join(", ")} will not have userId/username persisted; x_read_mentions will fail until tokens are corrected.`,
+            );
           }
         }
         if (identitiesToPersist.length > 0) {
@@ -2570,6 +2957,25 @@ export class InstallerStepEngine {
         const checks = verifyInstallation(this.modeConfig, this.options.apiKey);
         this.state.verifyChecks = checks;
         return { checks };
+      });
+
+      // Final invariant check: re-read openclaw.json and confirm every default the
+      // wizard promised actually landed on disk. Catches regressions where a later
+      // step silently overwrites an earlier one (the class of bug behind every manual
+      // VPS fix in the post-mortem). Fails the install rather than shipping a broken
+      // config to the user.
+      await this.runStep("final_smoke_check", "Verifying fresh-install invariants", async () => {
+        const result = runFreshInstallSmokeCheck(this.modeConfig, this.options, CONFIG_FILE);
+        if (!result.ok) {
+          for (const issue of result.issues) {
+            this.emitLog("final_smoke_check", "warn", issue);
+          }
+          throw new Error(
+            `Fresh-install smoke check failed (${result.issues.length} issue${result.issues.length === 1 ? "" : "s"}). The bot will not work out of the box. See warnings above.`,
+          );
+        }
+        this.emitLog("final_smoke_check", "info", "All fresh-install invariants OK (dmPolicy=open, heartbeat.target=last, X profiles have userId/username, cron models match provider).");
+        return result;
       });
 
       this.state.status = "completed";
