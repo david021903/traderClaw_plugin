@@ -2415,7 +2415,8 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_alpha_signals",
-      description: "Get buffered alpha signals from the SpyFly stream. By default returns only unseen signals and marks them as seen. Use minScore to filter low-quality signals. Poll this every heartbeat cycle in Step 1.5b. Returns signals sorted by ingestion time (newest last).",
+      description:
+        "Read the live alpha-stream state and buffered signals from the running plugin. This is the **single source of truth** for any question about current alpha activity — call it on the same turn whenever the user asks 'how many alpha signals', 'are we getting alpha', 'is alpha connected', 'latest signals', or any variant. Signals are NOT logged per-message, so the journal will show 0; only this tool returns the real count. Returned shape: { signals[], count, bufferSize, subscribed, stats: { messageCount (total received since connect), lastEventTs, uptimeSeconds, reconnectAttempt, unhealthyStreak, circuitBackoff } }. Pass unseen:false when the user is asking about overall state (don't mutate _seen). Pass unseen:true (default) during heartbeat polling to mark and consume new signals. Use minScore to filter low-quality signals. Returns signals sorted by ingestion time (newest last).",
       parameters: Type.Object({
         minScore: Type.Optional(Type.Number({ description: "Minimum systemScore threshold (0-100). Signals below this are excluded." })),
         chain: Type.Optional(Type.String({ description: "Filter by chain (e.g., 'solana'). BSC is already filtered at ingestion." })),
@@ -2466,7 +2467,8 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_alpha_sources",
-      description: "Get per-source statistics from the alpha signal buffer — signal count, average systemScore, and source type for each channel. Use for quick reputation checks during signal processing and to identify high-quality vs low-quality sources.",
+      description:
+        "Get per-source statistics from the alpha signal buffer — signal count, average systemScore, and source type for each channel. Call this when the user asks 'which alpha sources / channels are active', 'where are signals coming from', or any breakdown-by-source question. Always live; never answer source breakdowns from memory. Use also for quick reputation checks during signal processing.",
       parameters: Type.Object({}),
       execute: wrapExecute("solana_alpha_sources", async () => ({
         sources: alphaBuffer.getSourceStatsAll(),
@@ -3800,6 +3802,37 @@ const solanaTraderPlugin = {
         path: "state/entitlements.md",
         content: entitlementMd,
         source: "solana-trader:entitlements-digest",
+      });
+
+      // Live-status query routing. Alpha signal counts are not journalled
+      // (would be too noisy at sustained throughput) and live only inside
+      // the running plugin process. Without this guidance the agent often
+      // answers "zero / none" from log impressions when the buffer is
+      // actually full. Inject a small routing card on every bootstrap so
+      // every install gets the rule without needing workspace edits.
+      context.bootstrapFiles.push({
+        name: "live-queries.md",
+        path: "live-queries.md",
+        content:
+          "# Live alpha status queries — always call the tool\n\n" +
+          "When the user asks anything about CURRENT alpha activity, call the matching tool **on this turn**. Do NOT answer from memory or log impressions — alpha signals are not logged per-message, so 'I don't see any' is wrong by default.\n\n" +
+          "| User question shape | Tool | Key fields in response |\n" +
+          "|---|---|---|\n" +
+          "| how many alpha signals / are we getting alpha / activity today | `solana_alpha_signals` (unseen:false) | stats.messageCount, count, stats.uptimeSeconds, stats.lastEventTs, subscribed |\n" +
+          "| is alpha connected / healthy / stream status | `solana_alpha_signals` (unseen:false) | stats.subscribed, stats.reconnectAttempt, stats.unhealthyStreak, stats.circuitBackoff, stats.lastEventTs |\n" +
+          "| what alpha sources / channels are active | `solana_alpha_sources` | sources[] (name, type, count, avgScore) |\n" +
+          "| latest signals / new signals / any alpha on token X | `solana_alpha_signals` | signals[] sorted newest last |\n\n" +
+          "Reply template:\n\n" +
+          "```\n" +
+          "Live alpha state:\n" +
+          "- subscribed: <bool>\n" +
+          "- messages since connect: <messageCount> over <uptimeSeconds>s (≈ <rate>/min)\n" +
+          "- last signal: <Xs/Xm ago>\n" +
+          "- buffer (deduped): <bufferSize>\n" +
+          "- reconnects: <reconnectAttempt>, unhealthy streak: <unhealthyStreak>\n" +
+          "```\n\n" +
+          "This routing overrides any heartbeat-cycle 'minimal calls' cap: ad-hoc user status questions are NOT subject to per-cycle envelopes.\n",
+        source: "solana-trader:live-queries",
       });
 
       api.logger.info(`[solana-trader] Bootstrap: injected ${context.bootstrapFiles.length} files for agent ${bootAgentId}`);
