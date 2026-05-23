@@ -252,6 +252,8 @@
       "x_search_tweets",
       "risk_management_get_default",
       "risk_management_set_default",
+      "buy_amount_policy_get",
+      "buy_amount_policy_set",
       "trade_size_limit_get",
       "trade_size_limit_set",
       "position_risk_management_update"

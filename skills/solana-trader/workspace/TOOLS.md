@@ -27,7 +27,7 @@ Every tool has a mandatory trigger — when the trigger condition is met, you MU
 | `solana_gateway_credentials_set` | Register gateway URL and token | When gateway is not registered (startup) |
 | `solana_gateway_forward_probe` | Test forwarding path health | Startup sequence; when events stop arriving |
 
-### Wallet & Capital (11)
+### Wallet & Capital (13)
 | Tool | Purpose | When to Call |
 |---|---|---|
 | `solana_wallets` | List all wallets | Startup; when user asks about wallets |
@@ -39,8 +39,10 @@ Every tool has a mandatory trigger — when the trigger condition is met, you MU
 | `solana_killswitch_status` | Check kill switch state | Step 0 every heartbeat |
 | `risk_management_get_default` | Read per-wallet default TP/SL/trailing used when buys omit risk | Before relying on implicit defaults; after user asks about protection |
 | `risk_management_set_default` | Save per-wallet default exit plan for future buys | When user or policy wants custom defaults instead of platform system default |
-| `trade_size_limit_get` | Read max **buy** size (SOL) from wallet `limits` (default 1.5) | Before every buy or when user asks about size limits |
-| `trade_size_limit_set` | Set max **buy** size (SOL) on wallet `limits` | When user asks to change the per-order cap |
+| `trade_size_limit_get` | Read effective max **buy** size (SOL); merges legacy max with `buyAmounts.max` | Before every buy or when user asks about size limits |
+| `trade_size_limit_set` | Set max buy SOL (also mirrors into buy-amount max + hard enforcement when off) | When user asks to change the per-order cap |
+| `buy_amount_policy_get` | Read `buyAmountEnforcement` and fixed/min/max buy SOL | Before sizing when user may clamp or warn on amount |
+| `buy_amount_policy_set` | Update buy amount policy (off/soft/hard + bounds) | When user configures buy sizing on the Buy Strategy card |
 | `position_risk_management_update` | Adjust TP/SL/trailing **numbers** on an open position (same level count) | After entry when refining exits without removing levels |
 
 ### Scanning & Discovery (4)

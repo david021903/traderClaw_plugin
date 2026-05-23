@@ -75,12 +75,22 @@ Configured by the user on the **Buy Strategy** page. Checks token metrics before
 
 **Agent impact:** When `hard`, if you try to buy a token outside user bounds, the orchestrator returns a denial. Do not retry with the same token. Report the bound that was exceeded.
 
+### Buy Amount Policy (`buyAmountEnforcement`)
+
+Configured on the **Buy Strategy** page (SOL sizing). This is separate from **buy filters** (market cap, liquidity, etc.).
+
+| Mode | Behavior |
+|---|---|
+| `off` | No discretionary buy-amount policy. **Exception:** if the user previously set only legacy `maxTradeSizeSol` / `trade_size_limit_set` with no `buyAmounts` keys, the orchestrator still clamps buys to that maximum. |
+| `soft` | Buy runs at your requested `sizeSol`, but precheck/execute include **warnings** in `metadata.reasons` when fixed/min/max bounds are violated. |
+| `hard` | Buy **size is clamped** to the configured fixed SOL amount, or bounded by min/max SOL. Trades are **not** denied for sizing alone. Precheck returns `metadata.cappedSizeSol`; when it changed, `metadata.buyAmountAdjusted` is true and execute may include `policySizing`. |
+
+**Tools:** `buy_amount_policy_get`, `buy_amount_policy_set`, and `trade_size_limit_get` / `trade_size_limit_set` (max SOL, mirrored into `buyAmounts`).
+
 ### Soft-Enforced Limits (size reduction, not denial)
 
-Some limits adjust position size rather than deny outright:
-
-- **Top-10 holder concentration** (`maxTop10ConcentrationPct` in buy filters, if `soft`): When the top 10 wallets own too high a percentage, the orchestrator halves the proposed buy size.
-- **Max position USD** (`maxPositionUsd`): Orchestrator caps buy size to this limit silently if your proposed size exceeds it.
+- **Buy amount `hard` mode** and **legacy max trade size** clamp executed buy size. Treat precheck `metadata.cappedSizeSol` as authoritative when present; align execute `sizeSol` with that value to avoid policy drift.
+- Older notes about automatic halving from top-10 concentration or silent `maxPositionUsd` caps may not match every response — **always trust `solana_trade_precheck` metadata** over static tables.
 
 ### Risk Exit Enforcement (`riskEnforcement`)
 

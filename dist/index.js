@@ -2064,7 +2064,7 @@ ${notes}
     });
     api.registerTool({
       name: "trade_size_limit_get",
-      description: "Read the per-wallet maximum **buy** size in SOL enforced by the API (stored in `wallet.limits.maxTradeSizeSol`; platform default 1.5 SOL when unset). Always use this before sizing buys; never guess the limit.",
+      description: "Read the effective per-wallet **maximum buy** size in SOL from `GET /api/wallet/max-trade-size` (merges `buyAmounts.maxBuyAmountSol` with legacy `maxTradeSizeSol`). There is no platform default cap when unset \u2014 use the response before sizing buys.",
       parameters: Type.Object({}),
       execute: wrapExecute(
         "trade_size_limit_get",
@@ -2073,7 +2073,7 @@ ${notes}
     });
     api.registerTool({
       name: "trade_size_limit_set",
-      description: "Set the per-wallet maximum buy size in SOL (persisted on the wallet `limits` JSON). Subject to a platform ceiling.",
+      description: "Set the maximum buy size in SOL via `PUT /api/wallet/max-trade-size`. The server also mirrors this into `buyAmounts.maxBuyAmountSol` and sets `buyAmountEnforcement` to `hard` when it was `off`, so executes clamp to this max without denying the trade.",
       parameters: Type.Object({
         maxTradeSizeSol: Type.Number({ exclusiveMinimum: 0 })
       }),
@@ -2084,6 +2084,44 @@ ${notes}
           maxTradeSizeSol: params.maxTradeSizeSol
         })
       )
+    });
+    const buyAmountSolOptional = Type.Union([
+      Type.Number({ exclusiveMinimum: 0 }),
+      Type.Null()
+    ]);
+    api.registerTool({
+      name: "buy_amount_policy_get",
+      description: "Read `buyAmountEnforcement` and `buyAmounts` (fixed / min / max buy in SOL) from the wallet trading policy \u2014 same settings as the dashboard **Buy amount** card. Use when the user enforces sizing so you do not fight precheck/execute clamps.",
+      parameters: Type.Object({}),
+      execute: wrapExecute("buy_amount_policy_get", async () => {
+        const data = await get(`/api/wallet/trading-policy?walletId=${walletId}`);
+        return {
+          buyAmountEnforcement: data.buyAmountEnforcement ?? "off",
+          buyAmounts: data.buyAmounts ?? {}
+        };
+      })
+    });
+    api.registerTool({
+      name: "buy_amount_policy_set",
+      description: "Update buy sizing policy (`PATCH /api/wallet/trading-policy`). `hard` clamps each buy to fixed or min/max SOL without denying for size alone. `soft` only adds warnings; requested size still runs. Pass `null` for a bound to clear it.",
+      parameters: Type.Object({
+        buyAmountEnforcement: Type.Optional(
+          Type.Union([Type.Literal("off"), Type.Literal("soft"), Type.Literal("hard")])
+        ),
+        fixedBuyAmountSol: Type.Optional(buyAmountSolOptional),
+        minBuyAmountSol: Type.Optional(buyAmountSolOptional),
+        maxBuyAmountSol: Type.Optional(buyAmountSolOptional)
+      }),
+      execute: wrapExecute("buy_amount_policy_set", async (_id, params) => {
+        const body = { walletId };
+        if (params.buyAmountEnforcement !== void 0) body.buyAmountEnforcement = params.buyAmountEnforcement;
+        const buyAmounts = {};
+        if (params.fixedBuyAmountSol !== void 0) buyAmounts.fixedBuyAmountSol = params.fixedBuyAmountSol;
+        if (params.minBuyAmountSol !== void 0) buyAmounts.minBuyAmountSol = params.minBuyAmountSol;
+        if (params.maxBuyAmountSol !== void 0) buyAmounts.maxBuyAmountSol = params.maxBuyAmountSol;
+        if (Object.keys(buyAmounts).length) body.buyAmounts = buyAmounts;
+        return patch("/api/wallet/trading-policy", body);
+      })
     });
     api.registerTool({
       name: "risk_management_set_default",

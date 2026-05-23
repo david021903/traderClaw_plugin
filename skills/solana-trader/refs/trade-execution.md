@@ -5,8 +5,8 @@
 Call `solana_trade_precheck` with your intended trade parameters.
 
 - **If `approved: false` with hard denials:** STOP. Do not trade. Journal the denial reason.
-- **If approved with soft flags:** Reduce size to `cappedSizeSol`. Consider SERVER_MANAGED. Tighten stops.
-- **If approved cleanly:** Proceed to execute.
+- **If approved with clamps or sizing notes:** When precheck sets `metadata.cappedSizeSol`, use it as the executed buy size for the matching `trade_execute`. If `metadata.buyAmountAdjusted` is true (or execute returns `policySizing`), the orchestrator changed your requested `sizeSol` (buy-amount policy **hard** mode or legacy max). For buy-amount **soft** mode, you may keep your requested size but review `metadata.reasons`.
+- **If approved cleanly:** Proceed to execute with the intended size (still reconcile with `cappedSizeSol` when the server provides one).
 
 **Non-negotiable:** Never override hard denials. Never argue with the policy engine.
 
