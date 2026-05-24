@@ -122,9 +122,9 @@ Every tool has a mandatory trigger — when the trigger condition is met, you MU
 | `solana_bitquery_catalog` | Run pre-built template | Step 2: MANDATORY for FRESH tokens (first100Buyers, devHoldings); Step 2: website metadata check for tokens >0.60 |
 | `solana_bitquery_query` | Run custom raw GraphQL | When no catalog template fits your query need |
 | `solana_bitquery_subscribe` | Subscribe to real-time stream | Step 5: after every successful buy (realtimeTokenPricesSolana); startup for discovery streams |
-| `solana_bitquery_unsubscribe` | Unsubscribe from stream | Step 7: after every exit; `subscription_cleanup` cron for orphaned subscriptions |
-| `solana_bitquery_subscriptions` | List active subscriptions | Step 1: check for buffered events; `subscription_cleanup` cron |
-| `solana_bitquery_subscription_reopen` | Renew expiring subscription | `subscription_cleanup` cron for subscriptions nearing 24h expiry |
+| `solana_bitquery_unsubscribe` | Unsubscribe from stream | Step 7: after every exit; `subscription_cleanup` cron (`refs/ws-subscription-health.md`) |
+| `solana_bitquery_subscriptions` | List active subscriptions | Step 1: check for buffered events; `subscription_cleanup` cron diagnostics |
+| `solana_bitquery_subscription_reopen` | Renew expiring subscription | `subscription_cleanup` cron (24h TTL) |
 
 ### Memory & State (13)
 | Tool | Purpose | When to Call |
@@ -193,7 +193,7 @@ Every tool has a mandatory trigger — when the trigger condition is met, you MU
 ### Runtime (3)
 | Tool | Purpose | When to Call |
 |---|---|---|
-| `solana_runtime_status` | Plugin runtime health | Diagnostics; when tools behave unexpectedly |
+| `solana_runtime_status` | Plugin runtime health (alpha + Bitquery mux) | Diagnostics; `subscription_cleanup` cron baseline (`refs/ws-subscription-health.md`) |
 | `solana_agent_sessions` | List agent sessions | Diagnostics; when checking session state |
 | `solana_classify_deployer_risk` | Deployer risk (alias) | Same as `solana_compute_deployer_risk` — use either |
 

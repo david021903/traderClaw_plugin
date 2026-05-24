@@ -62,22 +62,71 @@ var BitqueryStreamManager = class {
   async unsubscribe(subscriptionId) {
     this.activeSubscriptions.delete(subscriptionId);
     if (!this.ws || this.ws.readyState !== 1) {
+      this.disconnectIfIdle();
       return { unsubscribed: true };
     }
     return new Promise((resolve) => {
+      const finish = () => {
+        resolve({ unsubscribed: true });
+        this.disconnectIfIdle();
+      };
       const timeout = setTimeout(() => {
         this.pendingUnsubscribes.delete(subscriptionId);
-        resolve({ unsubscribed: true });
+        finish();
       }, 1e4);
-      this.pendingUnsubscribes.set(subscriptionId, { resolve, timeout });
+      this.pendingUnsubscribes.set(subscriptionId, { resolve: finish, timeout });
       try {
         this.ws.send(JSON.stringify({ type: "bitquery_unsubscribe", subscriptionId }));
       } catch {
         clearTimeout(timeout);
         this.pendingUnsubscribes.delete(subscriptionId);
-        resolve({ unsubscribed: true });
+        finish();
       }
     });
+  }
+  /** Best-effort: notify orchestrator before gateway reconnect / dispose clears local mux. Sequential to avoid reorder races on the FIFO pending queue. */
+  async unsubscribeAll() {
+    const ids = [...this.activeSubscriptions.keys()];
+    let errors = 0;
+    for (const id of ids) {
+      try {
+        await this.unsubscribe(id);
+      } catch {
+        errors += 1;
+      }
+    }
+    this.disconnectIfIdle();
+    return { attempted: ids.length, errors };
+  }
+  /** WebSocket OPEN (TCP connected), not necessarily post-auth Bitquery-ready. */
+  isWebsocketOpen() {
+    return this.ws !== null && this.ws.readyState === 1;
+  }
+  getActiveTokens() {
+    const out = [];
+    for (const sub of this.activeSubscriptions.values()) {
+      const t = sub.variables?.token;
+      if (typeof t === "string" && t.trim()) out.push(t.trim());
+    }
+    return [...new Set(out)];
+  }
+  getActiveSubscriptionIds() {
+    return [...this.activeSubscriptions.keys()];
+  }
+  getStats() {
+    const ls = this.config.lifetimeState;
+    return {
+      lifetimeConnectCount: ls?.lifetimeConnectCount ?? 0,
+      reconnectAttempt: this.reconnectAttempt,
+      intentionalClose: this.intentionalClose,
+      websocketOpen: this.isWebsocketOpen(),
+      authenticated: this.authenticated,
+      activeSubscriptionCount: this.activeSubscriptions.size
+    };
+  }
+  bumpLifetimeConnect() {
+    const ls = this.config.lifetimeState;
+    if (ls) ls.lifetimeConnectCount += 1;
   }
   /** Close the WS if no active subscriptions remain. */
   disconnectIfIdle() {
@@ -190,6 +239,7 @@ var BitqueryStreamManager = class {
       ws.on("open", () => {
         clearTimeout(connectTimeout);
         this.reconnectAttempt = 0;
+        this.bumpLifetimeConnect();
         this.log("info", "Connected");
         pingInterval = setInterval(() => {
           if (!this.ws || this.ws.readyState !== 1) return;
@@ -274,7 +324,7 @@ var BitqueryStreamManager = class {
         if (pending) {
           clearTimeout(pending.timeout);
           this.pendingUnsubscribes.delete(subscriptionId);
-          pending.resolve({ unsubscribed: true });
+          pending.resolve();
         }
         this.disconnectIfIdle();
         break;
@@ -286,6 +336,7 @@ var BitqueryStreamManager = class {
           "WS_SUBSCRIBE_VALIDATION_ERROR",
           "BITQUERY_SUBSCRIPTION_TEMPLATE_NOT_FOUND",
           "WS_SUBSCRIPTION_LIMIT_REACHED",
+          "WS_PER_KEY_LIMIT",
           "WS_BRIDGE_UNAVAILABLE"
         ].includes(code)) {
           const pending = this.pendingSubscribeQueue.shift();
@@ -309,7 +360,7 @@ var BitqueryStreamManager = class {
     this.pendingSubscribeQueue = [];
     for (const [, pending] of this.pendingUnsubscribes) {
       clearTimeout(pending.timeout);
-      pending.resolve({ unsubscribed: true });
+      pending.resolve();
     }
     this.pendingUnsubscribes.clear();
   }

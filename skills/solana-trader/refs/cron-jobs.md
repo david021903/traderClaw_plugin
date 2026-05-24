@@ -95,13 +95,22 @@ At start of every cron job, check whether sufficient new data exists since last 
 
 ## Job: `subscription_cleanup`
 
-**Schedule:** Every 8 hours, offset by 15 min (`15 */8 * * *`) — 3 runs/day
+**Schedule:** Every 2 hours, offset by 15 min (`15 */2 * * *`) — ~12 runs/day
 
-**Purpose:** Manage Bitquery subscription lifecycle — remove orphaned subscriptions, reopen expiring ones.
+**Purpose:** Keep Bitquery subscription count healthy — remove orphaned subscriptions, reopen expiring streams, reconcile against **open positions**, and guard the **under-20 logical subscription cap** per client. Helps avoid `WS_SUBSCRIPTION_LIMIT_REACHED`; **never** unsubscribes alpha.
 
-**Tools:** `solana_positions`, `solana_bitquery_subscriptions`, `solana_bitquery_unsubscribe`, `solana_bitquery_subscription_reopen`, `solana_memory_write`
+**Tools:** `solana_runtime_status`, `solana_positions`, `solana_bitquery_subscriptions`, `solana_bitquery_subscribe`, `solana_bitquery_unsubscribe`, `solana_bitquery_subscription_reopen`, `solana_memory_write`
 
-**Workflow:** List open position CAs → list active subs (if AUTH_SCOPE_MISSING, log and stop) → match subs to positions → unsubscribe orphans → write tag 'subscription_cleanup'.
+**Workflow:**
+1. `solana_runtime_status` → local alpha + Bitquery mux snapshot (`bitqueryStream`).
+2. `solana_positions` → open mint addresses.
+3. `solana_bitquery_subscriptions` → orchestrator diagnostics (subscriber counts / connected websocket clients — field names mirror API response).
+4. Unsubscribe mismatched streams → subscribe missing `realtimeTokenPricesSolana` with **`agentId` matching the cron job's agent**.
+5. `solana_bitquery_subscription_reopen` for subs nearing TTL.
+6. If limits persist (`WS_PER_KEY_LIMIT`, stalled counts, absurd client fan-out) log **CRITICAL** via `solana_memory_write` — leaked TCP sockets may require a **manual gateway restart** (outside agent tools).
+7. Memory tag **`subscription_cleanup`** with before / after telemetry.
+
+See also: `refs/ws-subscription-health.md`.
 
 **Configuration:**
 - Model: Haiku (mechanical — match subs to positions, unsubscribe orphans)
@@ -209,9 +218,9 @@ At start of every cron job, check whether sufficient new data exists since last 
 | 2 | `trust-refresh` | `0 */8 * * *` | 3 | Haiku | off | on | none |
 | 3 | `meta-rotation` | `30 */8 * * *` | 3 | Sonnet | off | on | announce/last |
 | 4 | `strategy-evolution` | `0 6 * * *` | 1 | Sonnet | **on** | **off** | announce/last |
-| 5 | `subscription-cleanup` | `15 */8 * * *` | 3 | Haiku | off | on | announce/last |
+| 5 | `subscription-cleanup` | `15 */2 * * *` | ~12 | Haiku | off | on | announce/last |
 | 6 | `daily-performance-report` | `0 4 * * *` | 1 | Sonnet | off | **off** | announce/telegram |
 | 7 | `intelligence-lab-eval` | `0 16 * * *` | 1 | Sonnet | **on** | **off** | none |
 | 8 | `memory-trim` | `0 3 * * *` | 1 | Haiku | off | on | none |
 | 9 | `balance-watchdog` | `0 */2 * * *` | 12 | Haiku | off | on | announce/telegram |
-| | **Total** | | **31** | | | | |
+| | **Total** | | **40** | | | | |

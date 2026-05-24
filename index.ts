@@ -6,7 +6,7 @@ import { SessionManager, TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT } from "./src/ses
 import { AlphaBuffer } from "./src/alpha-buffer.js";
 import { AlphaStreamManager, type AlphaLifetimeState } from "./src/alpha-ws.js";
 import { shouldSyncGatewayCredentials } from "./src/gateway-config-sync.js";
-import { BitqueryStreamManager } from "./src/bitquery-ws.js";
+import { BitqueryStreamManager, type BitqueryLifetimeState } from "./src/bitquery-ws.js";
 import { normalizeToolSuccess, normalizeToolError, renderToolEnvelope } from "./src/tool-envelope.js";
 import {
   resolveWorkspaceRoot,
@@ -99,6 +99,9 @@ const SOLANA_TRADER_ALPHA_BUFFER_SINGLETON_KEY = Symbol.for(
 const SOLANA_TRADER_ALPHA_LIFETIME_SINGLETON_KEY = Symbol.for(
   "openclaw.solana-trader.alpha-lifetime.v1",
 );
+const SOLANA_TRADER_BITQUERY_LIFETIME_SINGLETON_KEY = Symbol.for(
+  "openclaw.solana-trader.bitquery-lifetime.v1",
+);
 const __solanaTraderAlphaSingletonHolder = globalThis as unknown as Record<
   symbol,
   unknown
@@ -125,6 +128,16 @@ function getOrCreateAlphaLifetimeState(): AlphaLifetimeState {
     lifetimeLastEventTs: 0,
   };
   __solanaTraderAlphaSingletonHolder[SOLANA_TRADER_ALPHA_LIFETIME_SINGLETON_KEY] = fresh;
+  return fresh;
+}
+
+function getOrCreateBitqueryLifetimeState(): BitqueryLifetimeState {
+  const existing = __solanaTraderAlphaSingletonHolder[
+    SOLANA_TRADER_BITQUERY_LIFETIME_SINGLETON_KEY
+  ] as BitqueryLifetimeState | undefined;
+  if (existing) return existing;
+  const fresh: BitqueryLifetimeState = { lifetimeConnectCount: 0 };
+  __solanaTraderAlphaSingletonHolder[SOLANA_TRADER_BITQUERY_LIFETIME_SINGLETON_KEY] = fresh;
   return fresh;
 }
 
@@ -2113,9 +2126,11 @@ const solanaTraderPlugin = {
     // The server exposes bitquery subscribe/unsubscribe only as WebSocket message
     // types, not HTTP endpoints. This manager holds a persistent WS connection
     // so the plugin can send those messages and keep subscriptions alive.
+    const bitqueryLifetimeState = getOrCreateBitqueryLifetimeState();
     const bitqueryStreamManager = new BitqueryStreamManager({
       wsUrl: orchestratorUrl.replace(/^http/, "ws").replace(/\/$/, "") + "/ws",
       walletId,
+      lifetimeState: bitqueryLifetimeState,
       getAccessToken: () => sessionManager.getAccessToken(),
       logger: {
         info: (msg) => api.logger.info(`[solana-trader] ${msg}`),
@@ -2125,7 +2140,18 @@ const solanaTraderPlugin = {
     });
 
     __solanaTraderDisposers.push(() => {
-      try { bitqueryStreamManager.close(); } catch { /* ignore */ }
+      void (async () => {
+        try {
+          await bitqueryStreamManager.unsubscribeAll();
+        } catch {
+          /* ignore */
+        }
+        try {
+          bitqueryStreamManager.close();
+        } catch {
+          /* ignore */
+        }
+      })();
     });
 
     api.registerTool({
@@ -2754,18 +2780,31 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_runtime_status",
-      description: "Return plugin runtime diagnostics including startup-gate cache, alpha stream status, and latest forwarding probe result.",
+      description:
+        "Return plugin runtime diagnostics: startup-gate cache, alpha stream (lifetime stats vs current socket), Bitquery mux (lifetime connect count, websocket/auth flags, tracked subscription IDs + mint tokens vs orchestrator diagnostics from solana_bitquery_subscriptions), and latest forwarding probe result. Use subscription_cleanup cron baseline.",
       parameters: Type.Object({}),
-      execute: wrapExecute("solana_runtime_status", async () => ({
-        startupGate: startupGateState,
-        alphaStream: {
-          subscribed: alphaStreamManager.isSubscribed(),
-          ingestionStale: alphaStreamManager.isIngestionStale(),
-          stats: alphaStreamManager.getStats(),
-          bufferSize: alphaBuffer.getBufferSize(),
-        },
-        lastForwardProbe: lastForwardProbeState,
-      })),
+      execute: wrapExecute("solana_runtime_status", async () => {
+        const bitqueryStats = bitqueryStreamManager.getStats();
+        const wsOpen = bitqueryStreamManager.isWebsocketOpen();
+        return {
+          startupGate: startupGateState,
+          alphaStream: {
+            subscribed: alphaStreamManager.isSubscribed(),
+            ingestionStale: alphaStreamManager.isIngestionStale(),
+            stats: alphaStreamManager.getStats(),
+            bufferSize: alphaBuffer.getBufferSize(),
+          },
+          bitqueryStream: {
+            stats: bitqueryStats,
+            connected: wsOpen && bitqueryStats.authenticated,
+            websocketOpen: wsOpen,
+            activeSubscriptionCount: bitqueryStats.activeSubscriptionCount,
+            activeSubscriptionIds: bitqueryStreamManager.getActiveSubscriptionIds(),
+            activeTokens: bitqueryStreamManager.getActiveTokens(),
+          },
+          lastForwardProbe: lastForwardProbeState,
+        };
+      }),
     });
 
     // =========================================================================

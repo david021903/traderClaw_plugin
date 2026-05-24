@@ -729,3 +729,4 @@ All decision making, evaluation, and learning MUST use SOL-based values.
 | `bitquery-schema.md` | Bitquery v2 EAP schema reference |
 | `query-catalog.md` | Bitquery query template catalog |
 | `websocket-streaming.md` | WebSocket message contract and subscription lifecycle |
+| `refs/ws-subscription-health.md` | Cron + mux health, 20-cap, leaked-socket escalation |

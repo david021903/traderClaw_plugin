@@ -69,11 +69,11 @@
       // ── Portfolio Maintenance ───────────────────────────────────────
       {
         id: "subscription-cleanup",
-        schedule: "15 */8 * * *",
+        schedule: "15 */2 * * *",
         agentId: "main",
         sessionTarget: "isolated",
         delivery: { mode: "announce", channel: "last", bestEffort: true },
-        message: "CRON_JOB: subscription_cleanup\n\nsolana_positions for open CAs → solana_bitquery_subscriptions for active subs (if AUTH_SCOPE_MISSING, log and stop) → match subs to positions → solana_bitquery_unsubscribe orphaned subs → solana_memory_write tag 'subscription_cleanup'. Summarize before/after counts.",
+        message: "CRON_JOB: subscription_cleanup\n\nGOAL: Keep Bitquery subscriptions healthy — one realtimeTokenPricesSolana per OPEN position, total active subs UNDER 20. Do NOT touch alpha (solana_alpha_unsubscribe forbidden).\n\nSTEP 1 — Baseline:\n  solana_runtime_status → note alphaStream.subscribed + bitqueryStream\n  solana_positions → open position CAs (mint addresses)\n  solana_bitquery_subscriptions → active subs + connectedWebSocketClients (if AUTH_SCOPE_MISSING, log and stop)\n\nSTEP 2 — Compute targets:\n  expectedSubs = count(open positions)\n  healthy TCP clients to orchestrator WS ≈ 1–2 (not 10+)\n  per-client Bitquery sub cap = 20 (OPENCLAW_WS_MAX_SUBS_PER_CLIENT)\n\nSTEP 3 — Reconcile:\n  Each active subscription where variables.token NOT in open CAs → solana_bitquery_unsubscribe({ subscriptionId })\n  Each open CA missing realtimeTokenPricesSolana → solana_bitquery_subscribe({ templateKey: \"realtimeTokenPricesSolana\", variables: { token: \"<CA>\" }, agentId: \"main\" })\n  Subs nearing 24h expiry or subscription_expiring → solana_bitquery_subscription_reopen\n\nSTEP 4 — Escalate if still unhealthy after reconcile:\n  If reported activeSubscriptionCount > 20 OR subscribe errors WS_PER_KEY_LIMIT / WS_SUBSCRIPTION_LIMIT_REACHED OR absurd connectedWebSocketClients:\n    solana_memory_write tag subscription_cleanup severity CRITICAL — gateway restart may be required to drop leaked TCP sockets (cron cannot restart the gateway).\n\nSTEP 5 — Report:\n  solana_memory_write tag subscription_cleanup — before/after: openPositions, activeSubs, connectedWebSocketClients, orphansRemoved, subsAdded, reopenedCount.",
         enabled: true
       },
 

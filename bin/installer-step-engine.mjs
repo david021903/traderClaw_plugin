@@ -1148,6 +1148,28 @@ function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
+/** Prescriptive cron message for WS + Bitquery subscription health (inline string for jobs.json merge). */
+const SUBSCRIPTION_CLEANUP_CRON_MESSAGE =
+  "CRON_JOB: subscription_cleanup\n\n" +
+  "GOAL: Keep Bitquery subscriptions healthy — one realtimeTokenPricesSolana per OPEN position, total active subs UNDER 20. Do NOT touch alpha (solana_alpha_unsubscribe forbidden).\n\n" +
+  "STEP 1 — Baseline:\n" +
+  "  solana_runtime_status → note alphaStream.subscribed + bitqueryStream\n" +
+  "  solana_positions → open position CAs (mint addresses)\n" +
+  "  solana_bitquery_subscriptions → active subs + connectedWebSocketClients (if AUTH_SCOPE_MISSING, log and stop)\n\n" +
+  "STEP 2 — Compute targets:\n" +
+  "  expectedSubs = count(open positions)\n" +
+  "  healthy TCP clients to orchestrator WS ≈ 1–2 (not 10+)\n" +
+  "  per-client Bitquery sub cap = 20 (OPENCLAW_WS_MAX_SUBS_PER_CLIENT)\n\n" +
+  "STEP 3 — Reconcile:\n" +
+  '  Each active subscription where variables.token NOT in open CAs → solana_bitquery_unsubscribe({ subscriptionId })\n' +
+  '  Each open CA missing realtimeTokenPricesSolana → solana_bitquery_subscribe({ templateKey: "realtimeTokenPricesSolana", variables: { token: "<CA>" }, agentId: "<same-as-this-cron-job-agentId>" })\n' +
+  "  Subs nearing 24h expiry or subscription_expiring → solana_bitquery_subscription_reopen\n\n" +
+  "STEP 4 — Escalate if still unhealthy after reconcile:\n" +
+  "  If reported activeSubscriptionCount > 20 OR subscribe errors WS_PER_KEY_LIMIT / WS_SUBSCRIPTION_LIMIT_REACHED OR absurd connectedWebSocketClients:\n" +
+  "    solana_memory_write tag subscription_cleanup severity CRITICAL — gateway restart may be required to drop leaked TCP sockets (cron cannot restart the gateway).\n\n" +
+  "STEP 5 — Report:\n" +
+  "  solana_memory_write tag subscription_cleanup — before/after: openPositions, activeSubs, connectedWebSocketClients, orphansRemoved, subsAdded, reopenedCount.";
+
 /**
  * Managed cron jobs with prescriptive tool chains (VPS report 2026-03-24).
  * Schedules are staggered (minutes :00 / :15 / :30 / :45) where possible to avoid pile-ups.
@@ -1205,10 +1227,9 @@ function traderCronPrescriptiveJobs(agentId) {
     },
     {
       id: "subscription-cleanup",
-      schedule: "15 */8 * * *",
+      schedule: "15 */2 * * *",
       agentId,
-      message:
-        "CRON_JOB: subscription_cleanup\n\nsolana_positions for open CAs → solana_bitquery_subscriptions for active subs (if AUTH_SCOPE_MISSING, log and stop) → match subs to positions → solana_bitquery_unsubscribe orphaned subs → solana_memory_write tag 'subscription_cleanup'. Summarize before/after counts.",
+      message: SUBSCRIPTION_CLEANUP_CRON_MESSAGE,
       thinking: false,
       lightContext: true,
       delivery: { mode: "announce", channel: "last", bestEffort: true },
@@ -3445,4 +3466,24 @@ export function assertWizardXCredentials(modeConfig, options = {}) {
 
 export function createInstallerStepEngine(modeConfig, options = {}, hooks = {}) {
   return new InstallerStepEngine(modeConfig, options, hooks);
+}
+
+/**
+ * Merge TraderClaw prescriptive cron jobs into the OpenClaw cron store (~/.openclaw/cron/jobs.json by default).
+ * Does not overwrite agent heartbeat or unrelated openclaw.json fields.
+ * @param {string} [configPath]
+ */
+export function mergeTraderCronJobsForCurrentConfig(configPath = CONFIG_FILE) {
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    config = {};
+  }
+  const isV2 =
+    config?.plugins?.entries?.["solana-trader-v2"]?.enabled === true ||
+    config?.plugins?.allow?.includes?.("solana-trader-v2");
+  const mainAgent = isV2 ? "cto" : "main";
+  const cronStorePath = resolveCronJobsStorePath(config);
+  return mergeTraderCronJobsIntoStore(cronStorePath, traderCronPrescriptiveJobs(mainAgent));
 }

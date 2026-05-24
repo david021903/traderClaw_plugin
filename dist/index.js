@@ -22,7 +22,7 @@ import {
 } from "./chunk-GX4HA22L.js";
 import {
   BitqueryStreamManager
-} from "./chunk-S2DLZKMQ.js";
+} from "./chunk-QIURFAOS.js";
 import {
   shouldSyncGatewayCredentials
 } from "./chunk-R24UDHQG.js";
@@ -784,6 +784,9 @@ var SOLANA_TRADER_ALPHA_BUFFER_SINGLETON_KEY = Symbol.for(
 var SOLANA_TRADER_ALPHA_LIFETIME_SINGLETON_KEY = Symbol.for(
   "openclaw.solana-trader.alpha-lifetime.v1"
 );
+var SOLANA_TRADER_BITQUERY_LIFETIME_SINGLETON_KEY = Symbol.for(
+  "openclaw.solana-trader.bitquery-lifetime.v1"
+);
 var __solanaTraderAlphaSingletonHolder = globalThis;
 function getOrCreateAlphaBuffer() {
   const existing = __solanaTraderAlphaSingletonHolder[SOLANA_TRADER_ALPHA_BUFFER_SINGLETON_KEY];
@@ -801,6 +804,13 @@ function getOrCreateAlphaLifetimeState() {
     lifetimeLastEventTs: 0
   };
   __solanaTraderAlphaSingletonHolder[SOLANA_TRADER_ALPHA_LIFETIME_SINGLETON_KEY] = fresh;
+  return fresh;
+}
+function getOrCreateBitqueryLifetimeState() {
+  const existing = __solanaTraderAlphaSingletonHolder[SOLANA_TRADER_BITQUERY_LIFETIME_SINGLETON_KEY];
+  if (existing) return existing;
+  const fresh = { lifetimeConnectCount: 0 };
+  __solanaTraderAlphaSingletonHolder[SOLANA_TRADER_BITQUERY_LIFETIME_SINGLETON_KEY] = fresh;
   return fresh;
 }
 var __solanaTraderStatusQueriesMd = (() => {
@@ -2509,9 +2519,11 @@ ${notes}
         })
       )
     });
+    const bitqueryLifetimeState = getOrCreateBitqueryLifetimeState();
     const bitqueryStreamManager = new BitqueryStreamManager({
       wsUrl: orchestratorUrl.replace(/^http/, "ws").replace(/\/$/, "") + "/ws",
       walletId,
+      lifetimeState: bitqueryLifetimeState,
       getAccessToken: () => sessionManager.getAccessToken(),
       logger: {
         info: (msg) => api.logger.info(`[solana-trader] ${msg}`),
@@ -2520,10 +2532,16 @@ ${notes}
       }
     });
     __solanaTraderDisposers.push(() => {
-      try {
-        bitqueryStreamManager.close();
-      } catch {
-      }
+      void (async () => {
+        try {
+          await bitqueryStreamManager.unsubscribeAll();
+        } catch {
+        }
+        try {
+          bitqueryStreamManager.close();
+        } catch {
+        }
+      })();
     });
     api.registerTool({
       name: "solana_bitquery_subscribe",
@@ -3070,18 +3088,30 @@ ${notes}
     });
     api.registerTool({
       name: "solana_runtime_status",
-      description: "Return plugin runtime diagnostics including startup-gate cache, alpha stream status, and latest forwarding probe result.",
+      description: "Return plugin runtime diagnostics: startup-gate cache, alpha stream (lifetime stats vs current socket), Bitquery mux (lifetime connect count, websocket/auth flags, tracked subscription IDs + mint tokens vs orchestrator diagnostics from solana_bitquery_subscriptions), and latest forwarding probe result. Use subscription_cleanup cron baseline.",
       parameters: Type.Object({}),
-      execute: wrapExecute("solana_runtime_status", async () => ({
-        startupGate: startupGateState,
-        alphaStream: {
-          subscribed: alphaStreamManager.isSubscribed(),
-          ingestionStale: alphaStreamManager.isIngestionStale(),
-          stats: alphaStreamManager.getStats(),
-          bufferSize: alphaBuffer.getBufferSize()
-        },
-        lastForwardProbe: lastForwardProbeState
-      }))
+      execute: wrapExecute("solana_runtime_status", async () => {
+        const bitqueryStats = bitqueryStreamManager.getStats();
+        const wsOpen = bitqueryStreamManager.isWebsocketOpen();
+        return {
+          startupGate: startupGateState,
+          alphaStream: {
+            subscribed: alphaStreamManager.isSubscribed(),
+            ingestionStale: alphaStreamManager.isIngestionStale(),
+            stats: alphaStreamManager.getStats(),
+            bufferSize: alphaBuffer.getBufferSize()
+          },
+          bitqueryStream: {
+            stats: bitqueryStats,
+            connected: wsOpen && bitqueryStats.authenticated,
+            websocketOpen: wsOpen,
+            activeSubscriptionCount: bitqueryStats.activeSubscriptionCount,
+            activeSubscriptionIds: bitqueryStreamManager.getActiveSubscriptionIds(),
+            activeTokens: bitqueryStreamManager.getActiveTokens()
+          },
+          lastForwardProbe: lastForwardProbeState
+        };
+      })
     });
     api.registerTool({
       name: "solana_state_save",
